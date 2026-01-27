@@ -23,7 +23,8 @@ jobs:
       - name: Write service account json
         shell: bash
         run: |
-          echo '${{ secrets.GSERVICE_JSON }}' > service_account.json
+          echo "${{ secrets.GSERVICE_JSON_B64 }}" | base64 -d > service_account.json
+
 
       - name: Run worker
         env:
