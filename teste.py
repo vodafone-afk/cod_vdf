@@ -81,7 +81,7 @@ def iniciar_server():
 threading.Thread(target=iniciar_server, daemon=True).start()
 
 # CONFIGURAÇÃO DO BOT
-TOKEN_BOT = "MTQyOTU0NTc3NDYzODY5NDY0MQ.Gotg2-.kjbBPgQybEKaxt5QDf70okWk7iDsZ2rNV89rEE"
+TOKEN_BOT = os.getenv("DISCORD_BOT_TOKEN")
 CAMINHO_RC = "C:\\Users\\User\\Desktop\\vodafone"
 
 CAMINHO_PAI = os.path.dirname(CAMINHO_RC)
