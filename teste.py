@@ -56,154 +56,6 @@ import urllib.error
 import json
 from typing import List, Tuple, Optional
 
-import discord
-from discord.ext import commands
-
-from flask import Flask, send_from_directory
-import threading
-
-CAMINHO_ATUAL = os.path.dirname(os.path.abspath(__file__))
-
-DOWNLOAD_DIR = r"C:\Users\User\Desktop\vodafone"
-
-app = Flask(__name__)
-
-BASE_DIR = CAMINHO_ATUAL  # ou CAMINHO_BASE
-
-@app.route("/download/<path:filename>")
-def download_file(filename):
-    return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
-
-
-def iniciar_server():
-    app.run(host="0.0.0.0", port=8000)
-
-threading.Thread(target=iniciar_server, daemon=True).start()
-
-# CONFIGURAÇÃO DO BOT
-TOKEN_BOT = os.getenv("DISCORD_BOT_TOKEN")
-CAMINHO_RC = "C:\\Users\\User\\Desktop\\vodafone"
-
-CAMINHO_PAI = os.path.dirname(CAMINHO_RC)
-
-GUILD_ID = 1361378969986797798  # mete aqui o teu server ID
-
-CAMINHO_BASE = os.path.dirname(os.path.abspath(__file__))
-
-DISCORD_QUEUE = []
-
-
-
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-@bot.event
-async def on_ready():
-    print(f"Bot pronto: {bot.user}")
-
-    for uuid_pc, nome_vendedor in DISCORD_QUEUE:
-        await notificar_discord_bot(uuid_pc, nome_vendedor) 
-
-    DISCORD_QUEUE.clear()
-
-@bot.command(name="ls")
-async def listar_ficheiros(ctx):
-
-    await ctx.send(f"📂 Diretório: `{CAMINHO_ATUAL}`")
-
-    if not os.path.exists(CAMINHO_ATUAL):
-        await ctx.send("❌ Pasta não existe.")
-        return
-
-    itens = os.listdir(CAMINHO_ATUAL)
-
-    if not itens:
-        await ctx.send("⚠️ Pasta vazia.")
-        return
-
-    resultado = []
-
-    for item in itens:
-        caminho = os.path.join(CAMINHO_ATUAL, item)
-
-        if os.path.isdir(caminho):
-            resultado.append(f"📁 `{item}`")   # pasta
-
-        elif item.lower().endswith(".pdf"):
-            resultado.append(f"📄 `{item}`")   # pdf
-
-        elif item.lower().endswith(".exe"):
-            resultado.append(f"🖥️ `{item}`")   # executável
-
-        else:
-            resultado.append(f"📦 `{item}`")   # outros
-
-    await ctx.send("**Conteúdo:**\n" + "\n".join(resultado[:50]))
-
-@bot.command(name="cd")
-async def mudar_diretorio(ctx, *, caminho: str):
-
-    global CAMINHO_ATUAL
-
-    # suporte a caminhos relativos e absolutos
-    novo_caminho = os.path.abspath(os.path.join(CAMINHO_ATUAL, caminho))
-
-    if not os.path.exists(novo_caminho):
-        await ctx.send(f"❌ Caminho não existe:\n`{novo_caminho}`")
-        return
-
-    if not os.path.isdir(novo_caminho):
-        await ctx.send("❌ Isso não é uma pasta.")
-        return
-
-    CAMINHO_ATUAL = novo_caminho
-
-    await ctx.send(f"📁 Diretório alterado para:\n`{CAMINHO_ATUAL}`")
-
-@bot.command(name="download")
-async def baixar_ficheiro(ctx, *, nome_ficheiro: str):
-
-    caminho = os.path.join(CAMINHO_ATUAL, nome_ficheiro)
-
-    if not os.path.exists(caminho):
-        await ctx.send("❌ Ficheiro não encontrado.")
-        return
-
-    from urllib.parse import quote
-
-    nome_url = quote(nome_ficheiro)
-
-    link = f"http://127.0.0.1:8000/download/{nome_url}"
-    await ctx.send(
-        f"📥 **Download pronto**\n\n"
-        f"📄 `{nome_ficheiro}`\n\n"
-        f"👉 [Clica aqui para descarregar]({link})"
-    )
-
-# Função para correr o bot sem bloquear o Tkinter
-def iniciar_bot_background():
-    try:
-        bot.run(TOKEN_BOT)
-    except Exception as e:
-        print(f"Erro ao iniciar bot: {e}")
-
-# Lançar o bot numa thread separada
-threading.Thread(target=iniciar_bot_background, daemon=True).start()
-
-
-async def criar_canal_comercial(guild, nome, uuid):
-    nome_canal = f"{nome}-{uuid}".lower().replace(" ", "-")
-
-    # Verifica se já existe
-    canal = discord.utils.get(guild.text_channels, name=nome_canal)
-    if canal:
-        return canal
-
-    # Cria canal
-    novo_canal = await guild.create_text_channel(nome_canal)
-    return novo_canal
-
 # ====================== GOOGLE SHEETS (EXPORT PERGUNTAS) ======================
 # Nota: requer "pip install google-api-python-client google-auth"
 try:
@@ -548,35 +400,27 @@ def ensure_rc_columns(conn):
 
 
 
-async def notificar_discord_bot(uuid_pc, nome_vendedor):
-    await bot.wait_until_ready()
-
-    guild = bot.get_guild(GUILD_ID)
-
-    if guild is None:
-        print("❌ Guild não encontrada. O bot pode não estar no servidor.")
+def notificar_discord(uuid_pc, nome_vendedor):
+    """Avisa no Discord sempre que um assistente entra na app."""
+    # SUBSTITUI O LINK ABAIXO PELO URL DO TEU WEBHOOK DO DISCORD
+    webhook_url = "https://discord.com/api/webhooks/1361381347071102986/Ps_Hmly2htbbRzm9Vy1Mx4yDc3BV4mn6locYKJHVai1PsffCrNhF1eF8NpmPIpS78DqI"
+    
+    if not webhook_url or webhook_url == "COLA_AQUI_O_TEU_LINK_DO_WEBHOOK":
         return
 
-    nome_canal = f"{nome_vendedor}-{uuid_pc}".lower().replace(" ", "-")
-
+    # A mensagem exata que pediste!
+    mensagem = {
+        "content": f"🟢 **UUID : {uuid_pc}** (`{nome_vendedor}`) entrou na app."
+    }
+    
     try:
-        canal = discord.utils.get(guild.text_channels, name=nome_canal)
-
-        if canal is None:
-            canal = await guild.create_text_channel(nome_canal)
-            print(f"✅ Canal criado: {nome_canal}")
-
-        await canal.send(
-            f"🟢 **UUID:** `{uuid_pc}`\n👤 **Nome:** {nome_vendedor}"
-        )
-
-    except Exception as e:
-        print(f"❌ Erro ao criar canal: {e}")
-
-import asyncio
-
-def notificar_discord(uuid_pc, nome_vendedor):
-    DISCORD_QUEUE.append((uuid_pc, nome_vendedor))
+        req = urllib.request.Request(webhook_url, method="POST")
+        req.add_header('Content-Type', 'application/json; charset=utf-8')
+        req.add_header('User-Agent', 'VodafoneApp/1.0')
+        urllib.request.urlopen(req, data=json.dumps(mensagem).encode('utf-8'), timeout=3)
+    except Exception:
+        # Se falhar (ex: sem net no segundo exato), ignora para não crashar a app deles
+        pass
 
 def _rc_row_from_form(dados: dict, nome_vendedor: str, sfid: str) -> dict:
     """Mapeia os dados do formulário para colunas RC (inclui campos novos)."""
@@ -2040,9 +1884,8 @@ def preencher_pdf(dados):
         nome_pdf = ""
 
 
-    # No teste.py, dentro de preencher_pdf(dados):
-    uuid_pc = obter_uuid() # Função que já tens no código
-    out_base = _safe_filename(f"{uuid_pc}_{dados.get('nif', '')}_{dados.get('nome_completo', '')}")
+    # Nome do PDF de saída: NIF + Nome (novo titular / topo do formulário)
+    out_base = _safe_filename(f"{dados.get('nif', '')}_{dados.get('nome_completo', '')}")
     output_pdf = f"{out_base}.pdf"
     doc = fitz.open(PDF_ORIGINAL)
 
@@ -2492,9 +2335,8 @@ def preencher_pdf(dados):
         
     doc_final.insert_pdf(doc) # Insere o Contrato que acabou de ser preenchido pela tua app
 
-    # No teste.py, dentro de preencher_pdf(dados):
-    uuid_pc = obter_uuid() # Função que já tens no código
-    out_base = _safe_filename(f"{uuid_pc}_{dados.get('nif', '')}_{dados.get('nome_completo', '')}")
+    # 6. Guardar o novo PDF com o nome pedido
+    out_base = _safe_filename(f"{dados.get('nif', '')}_{dados.get('nome_completo', '')}")
     output_pdf = f"pdf_novo_{out_base}.pdf" 
 
     doc_final.save(output_pdf, garbage=4, deflate=True)
@@ -5750,4 +5592,3 @@ if __name__ == "__main__":
     abrir_login()
 
     # cod completo é este e esta complementado com AI
-
