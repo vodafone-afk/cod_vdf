@@ -9,7 +9,7 @@ r"""
                                                                                               
                                                                                                                                                                                           
 
-Desenvolvido por : David Pereira
+Desenvolvido por : David Pereira.
 © 2026 Vodafone – Todos os direitos reservados.
 Uso interno. Reprodução ou distribuição não autorizada.
 
