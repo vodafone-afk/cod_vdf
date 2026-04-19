@@ -397,6 +397,31 @@ def ensure_rc_columns(conn):
     conn.commit()
     cur.close()
 
+
+
+
+def notificar_discord(uuid_pc, nome_vendedor):
+    """Avisa no Discord sempre que um assistente entra na app."""
+    # SUBSTITUI O LINK ABAIXO PELO URL DO TEU WEBHOOK DO DISCORD
+    webhook_url = "https://discord.com/api/webhooks/1361381347071102986/Ps_Hmly2htbbRzm9Vy1Mx4yDc3BV4mn6locYKJHVai1PsffCrNhF1eF8NpmPIpS78DqI"
+    
+    if not webhook_url or webhook_url == "COLA_AQUI_O_TEU_LINK_DO_WEBHOOK":
+        return
+
+    # A mensagem exata que pediste!
+    mensagem = {
+        "content": f"🟢 **UUID : {uuid_pc}** (`{nome_vendedor}`) entrou na app."
+    }
+    
+    try:
+        req = urllib.request.Request(webhook_url, method="POST")
+        req.add_header('Content-Type', 'application/json; charset=utf-8')
+        req.add_header('User-Agent', 'VodafoneApp/1.0')
+        urllib.request.urlopen(req, data=json.dumps(mensagem).encode('utf-8'), timeout=3)
+    except Exception:
+        # Se falhar (ex: sem net no segundo exato), ignora para não crashar a app deles
+        pass
+
 def _rc_row_from_form(dados: dict, nome_vendedor: str, sfid: str) -> dict:
     """Mapeia os dados do formulário para colunas RC (inclui campos novos)."""
     morada = f'{dados.get("rua_faturacao","")}, {dados.get("localidade_faturacao","")}'.strip().strip(",")
@@ -5417,6 +5442,11 @@ def abrir_login():
             except Exception:
                 pass
         globals()['CURRENT_VENDEDOR_MAC'] = int(mac_val) if str(mac_val).strip() != '' else 0
+
+        # ==========================================
+        # CHAMA O DISCORD AQUI!
+        # ==========================================
+        notificar_discord(uuid_pc, vendedor.get('nome', 'Desconhecido'))
         abrir_interface(vendedor["nome"], vendedor["SFID"])
         return
 
@@ -5495,6 +5525,13 @@ def abrir_login():
         conn.commit()
         cursor.close()
         conn.close()
+
+        # ==========================================
+        # CHAMA O DISCORD AQUI TAMBÉM! (Para malta nova)
+        # ==========================================
+        notificar_discord(uuid_pc, n)
+
+
         # Sinalizar ao fluxo principal que o registo foi concluído
         next_user['nome'] = n
         next_user['sfid'] = s
