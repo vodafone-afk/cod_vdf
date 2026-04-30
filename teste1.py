@@ -3496,7 +3496,7 @@ def abrir_interface(nome, ssfid, janela=None):
     aba_eurus = ttk.Frame(notebook)
     notebook.add(aba_gerar, text="📝 Gerar Contrato")
     notebook.add(aba_lista, text="📂 Contratos Gerados")
-    notebook.add(aba_melhorias, text="🛠 Melhorias")
+    notebook.add(aba_melhorias, text="🛠 Melho")
     
     # notebook.add(aba_eurus, text="🤖 EURUS")
 
