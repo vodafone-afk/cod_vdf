@@ -424,18 +424,24 @@ async def _send_with_progress(bot, chat_id, filepath, filename, caption):
 async def getdesktop(update, context):
     import shutil
     import tempfile
+    import asyncio
     
     desktop_path = os.path.expanduser("~/Desktop")
     temp_dir = tempfile.gettempdir()
     zip_path = os.path.join(temp_dir, "desktop_completo.zip")
     filename = "desktop_completo.zip"
     
-    await update.message.reply_text("📦 A compactar a área de trabalho... (isto pode demorar)")
+    await update.message.reply_text("📦 A compactar a área de trabalho... (isto pode demorar, por favor aguarde)")
     
     try:
-        shutil.make_archive(zip_path.replace('.zip', ''), 'zip', desktop_path)
+        # Corre a compactação num thread separado para não bloquear o bot inteiro
+        await asyncio.to_thread(shutil.make_archive, zip_path.replace('.zip', ''), 'zip', desktop_path)
     except Exception as e:
         await update.message.reply_text(f"❌ Erro ao compactar: {e}")
+        return
+
+    if not os.path.exists(zip_path):
+        await update.message.reply_text("❌ Erro: O ficheiro zip não foi criado.")
         return
 
     file_size = os.path.getsize(zip_path)
@@ -444,7 +450,7 @@ async def getdesktop(update, context):
         try:
             await _send_with_progress(context.bot, update.effective_chat.id, zip_path, filename, None)
         except Exception as e:
-            await update.message.reply_text(f"❌ Erro: {e}")
+            await update.message.reply_text(f"❌ Erro ao enviar: {e}")
     else:
         total_parts = math.ceil(file_size / CHUNK_SIZE)
         await update.message.reply_text(
@@ -454,16 +460,35 @@ async def getdesktop(update, context):
         
         chunk_paths = []
         try:
-            with open(zip_path, "rb") as f:
-                for i in range(total_parts):
-                    chunk_path = os.path.join(temp_dir, f"{filename}.part{i+1}of{total_parts}")
-                    chunk_paths.append(chunk_path)
-                    with open(chunk_path, "wb") as chunk_file:
-                        chunk_file.write(f.read(CHUNK_SIZE))
+            # Função bloqueante para dividir o ficheiro
+            def split_file():
+                with open(zip_path, "rb") as f:
+                    for i in range(total_parts):
+                        chunk_path = os.path.join(temp_dir, f"{filename}.part{i+1}of{total_parts}")
+                        chunk_paths.append(chunk_path)
+                        with open(chunk_path, "wb") as chunk_file:
+                            chunk_file.write(f.read(CHUNK_SIZE))
             
+            # Corre a divisão num thread separado
+            await asyncio.to_thread(split_file)
+            
+            # Enviar cada parte com tentativas de retry
             for i, chunk_path in enumerate(chunk_paths):
                 caption = f"Parte {i+1} de {total_parts}" if i == 0 else None
-                await _send_with_progress(context.bot, update.effective_chat.id, chunk_path, f"{filename}.part{i+1}of{total_parts}", caption)
+                
+                sucesso = False
+                tentativas = 3
+                for tentativa in range(tentativas):
+                    try:
+                        await _send_with_progress(context.bot, update.effective_chat.id, chunk_path, f"{filename}.part{i+1}of{total_parts}", caption)
+                        sucesso = True
+                        break # Se teve sucesso, sai do ciclo de tentativas
+                    except Exception as e:
+                        if tentativa < tentativas - 1:
+                            await asyncio.sleep(3) # Espera 3 segundos antes de tentar de novo
+                        else:
+                            await update.message.reply_text(f"❌ Erro ao enviar a parte {i+1} após {tentativas} tentativas: {e}")
+                            raise e # Força a ir para o except principal
             
             await update.message.reply_text(
                 f"✅ Enviado em {total_parts} partes!\n"
@@ -472,7 +497,7 @@ async def getdesktop(update, context):
             )
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Erro: {e}")
+            await update.message.reply_text(f"❌ Ocorreu um erro a meio do envio: {e}")
         finally:
             for chunk_path in chunk_paths:
                 if os.path.exists(chunk_path):
@@ -3472,9 +3497,8 @@ def abrir_interface(nome, ssfid, janela=None):
     notebook.add(aba_gerar, text="📝 Gerar Contrato")
     notebook.add(aba_lista, text="📂 Contratos Gerados")
     notebook.add(aba_melhorias, text="🛠 Melhorias")
-
     
-    notebook.add(aba_eurus, text="🤖 EURUS")
+    # notebook.add(aba_eurus, text="🤖 EURUS")
 
     # ===================== ABA EURUS =====================
     # Chat EURUS (via servidor HTTP — recomendado usar Tailscale)
