@@ -399,6 +399,7 @@ async def _send_with_progress(bot, chat_id, filepath, filename, caption):
 
     anim_task = asyncio.create_task(animate())
     
+    sucesso = False
     try:
         with open(filepath, "rb") as f:
             await bot.send_document(
@@ -410,13 +411,20 @@ async def _send_with_progress(bot, chat_id, filepath, filename, caption):
                 write_timeout=300,
                 connect_timeout=60,
             )
+        sucesso = True
     finally:
         keep_animating = False
         await anim_task
-        try:
-            await bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=f"✅ {filename} concluído!")
-        except Exception:
-            pass
+        if sucesso:
+            try:
+                await bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=f"✅ {filename} concluído!")
+            except Exception:
+                pass
+        else:
+            try:
+                await bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=f"⚠️ Falha a enviar {filename}, a tentar de novo...")
+            except Exception:
+                pass
 
 # =========================
 # COMANDO /getdesktop
@@ -425,6 +433,7 @@ async def getdesktop(update, context):
     import shutil
     import tempfile
     import asyncio
+    import telegram.error
     
     desktop_path = os.path.expanduser("~/Desktop")
     temp_dir = tempfile.gettempdir()
@@ -449,6 +458,9 @@ async def getdesktop(update, context):
     if file_size <= CHUNK_SIZE:
         try:
             await _send_with_progress(context.bot, update.effective_chat.id, zip_path, filename, None)
+        except telegram.error.RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 2)
+            await _send_with_progress(context.bot, update.effective_chat.id, zip_path, filename, None)
         except Exception as e:
             await update.message.reply_text(f"❌ Erro ao enviar: {e}")
     else:
@@ -472,20 +484,23 @@ async def getdesktop(update, context):
             # Corre a divisão num thread separado
             await asyncio.to_thread(split_file)
             
-            # Enviar cada parte com tentativas de retry
+            # Enviar cada parte com tentativas de retry e prevenção de spam (Rate Limit)
             for i, chunk_path in enumerate(chunk_paths):
                 caption = f"Parte {i+1} de {total_parts}" if i == 0 else None
                 
-                sucesso = False
-                tentativas = 3
+                tentativas = 5
                 for tentativa in range(tentativas):
                     try:
                         await _send_with_progress(context.bot, update.effective_chat.id, chunk_path, f"{filename}.part{i+1}of{total_parts}", caption)
-                        sucesso = True
+                        await asyncio.sleep(3) # Pausa de 3 segundos entre partes para o Telegram não nos bloquear por flood!
                         break # Se teve sucesso, sai do ciclo de tentativas
+                    except telegram.error.RetryAfter as e:
+                        # O Telegram está a dizer para esperarmos X segundos porque fomos rápidos demais
+                        print(f"Limitação do Telegram. A aguardar {e.retry_after} segundos...")
+                        await asyncio.sleep(e.retry_after + 2)
                     except Exception as e:
                         if tentativa < tentativas - 1:
-                            await asyncio.sleep(3) # Espera 3 segundos antes de tentar de novo
+                            await asyncio.sleep(5) # Espera 5 segundos antes de tentar de novo
                         else:
                             await update.message.reply_text(f"❌ Erro ao enviar a parte {i+1} após {tentativas} tentativas: {e}")
                             raise e # Força a ir para o except principal
