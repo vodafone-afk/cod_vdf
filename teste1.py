@@ -59,6 +59,8 @@ import telegram.request
 import json
 import math
 import glob
+import sys
+import tempfile
 from typing import List, Tuple, Optional
 
 from telegram import Update
@@ -680,9 +682,11 @@ print("📦 App principal a correr...")
 try:
     from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
-except Exception:
+    GOOGLE_IMPORT_ERROR = None
+except Exception as e:
     Credentials = None
     build = None
+    GOOGLE_IMPORT_ERROR = str(e)
 
 
 # ====================== RESTART APP (após registo) ======================
@@ -705,6 +709,100 @@ DB_CONFIG = {
     "database": "sql7813184",
     "port": 3306
 }
+
+# ====================== GITHUB CLOUD CONFIG ======================
+GITHUB_BASE_URL = "https://raw.githubusercontent.com/vodafone-afk/cod_vdf/main/"
+GITHUB_TOKEN = "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"
+GITHUB_REPO = "vodafone-afk/cod_vdf"
+
+def upload_to_github(local_path: str, remote_path: str):
+    """Faz o upload de um ficheiro local para o repositório GitHub usando a API."""
+    import base64
+    import json
+    
+    if not os.path.exists(local_path):
+        print(f"❌ Upload falhou: Ficheiro local {local_path} não existe.")
+        return False
+        
+    try:
+        print(f"☁️ A iniciar upload para GitHub: {remote_path}...")
+        with open(local_path, "rb") as f:
+            content = base64.b64encode(f.read()).decode("utf-8")
+            
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{remote_path}"
+        
+        # Verificar se o ficheiro já existe para obter o SHA (necessário para update)
+        sha = None
+        try:
+            req_get = urllib.request.Request(url)
+            req_get.add_header("Authorization", f"token {GITHUB_TOKEN}")
+            req_get.add_header("Accept", "application/vnd.github.v3+json")
+            with urllib.request.urlopen(req_get, timeout=10) as resp:
+                info = json.loads(resp.read().decode())
+                sha = info.get("sha")
+        except Exception as e:
+            # Se der 404, o ficheiro não existe, o que é normal para o primeiro upload
+            pass
+            
+        data_dict = {
+            "message": f"Upload RC: {os.path.basename(remote_path)}",
+            "content": content,
+            "branch": "main"
+        }
+        if sha:
+            data_dict["sha"] = sha
+            
+        data = json.dumps(data_dict).encode("utf-8")
+        
+        req = urllib.request.Request(url, data=data, method="PUT")
+        req.add_header("Authorization", f"token {GITHUB_TOKEN}")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Accept", "application/vnd.github.v3+json")
+        
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            if resp.status in [200, 201]:
+                print(f"✅ Upload concluído com sucesso para o GitHub: {remote_path}")
+                return True
+            else:
+                print(f"⚠️ Resposta do GitHub: {resp.status}")
+                return False
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode()
+        print(f"❌ Erro HTTP no upload ({e.code}): {error_body}")
+        if e.code == 403:
+            print("💡 Dica: Verifica se o teu Token tem permissões de 'Contents: Read and Write'.")
+        return False
+    except Exception as e:
+        print(f"❌ Erro inesperado no upload: {e}")
+        return False
+
+def ensure_local_file(relative_path: str) -> str:
+    """Verifica se um ficheiro existe localmente na pasta temporária. Se não, descarrega-o."""
+    import tempfile
+    
+    filename = os.path.basename(relative_path)
+
+    # 1. Verificar se o ficheiro está embutido dentro do EXE (PyInstaller)
+    if hasattr(sys, '_MEIPASS'):
+        bundle_path = os.path.join(sys._MEIPASS, filename)
+        if os.path.exists(bundle_path):
+            return bundle_path
+
+    # 2. Guardar na pasta temporária do sistema para não sujar a pasta da app
+    local_path = os.path.join(tempfile.gettempdir(), filename)
+        
+    if not os.path.exists(local_path):
+        remote_url = GITHUB_BASE_URL + relative_path
+        print(f"☁️ A descarregar para pasta temporária: {remote_url}")
+        try:
+            req = urllib.request.Request(remote_url)
+            with urllib.request.urlopen(req, timeout=15) as response, open(local_path, 'wb') as out_file:
+                out_file.write(response.read())
+            print(f"✅ Download temporário concluído: {filename}")
+        except Exception as e:
+            print(f"❌ Erro ao descarregar {filename} do Cloud: {e}")
+            
+    return local_path
 
 
 
@@ -1453,10 +1551,9 @@ def exportar_perguntas_para_google_sheets(dados: dict) -> Tuple[bool, str]:
     # Import local (evita problemas de import circular)
     from tkinter import messagebox
 
-    # Regra: este export é suportado apenas em Windows.
-    # (Em macOS os RCs ficam pendentes para um Windows os enviar - bridge.)
-    if not sys.platform.startswith("win"):
-        return (False, "Export para Google Sheets só é suportado em Windows (bridge).")
+    # Regra: Agora suportado em Windows e Mac.
+    # if not sys.platform.startswith("win"):
+    #     return (False, "Export para Google Sheets só é suportado em Windows (bridge).")
 
     # Se não tiveres as libs instaladas, não bloqueia a app com mensagem enganadora
     if Credentials is None or build is None:
@@ -1466,9 +1563,10 @@ def exportar_perguntas_para_google_sheets(dados: dict) -> Tuple[bool, str]:
             "Erro Google Sheets",
             "Não foi possível carregar as bibliotecas do Google Sheets.\n\n"
             f"Sistema: {so}\n"
+            f"Python: {sys.executable}\n"
             f"Detalhe técnico: {detalhe}\n\n"
             "Solução típica:\n"
-            "- Se corres como .py: instala 'google-api-python-client' e 'google-auth'\n"
+            f"- Corre este comando: {sys.executable} -m pip install google-api-python-client google-auth\n"
             "- Se é app empacotada (PyInstaller): faltam hidden-imports no build"
         )
         return False, "Bibliotecas Google Sheets em falta."
@@ -2512,8 +2610,10 @@ def obter_primeiro_ultimo(nome_completo):
     return str(nome_completo).strip()
 
 def preencher_pdf(dados):
-    if not os.path.exists(PDF_ORIGINAL):
-        messagebox.showerror("Erro", f"Não encontrei o ficheiro {PDF_ORIGINAL}")
+    # Garantir que o template existe (na pasta temporária)
+    pdf_template_path = ensure_local_file(PDF_ORIGINAL)
+    if not os.path.exists(pdf_template_path):
+        messagebox.showerror("Erro", f"Não encontrei o ficheiro {PDF_ORIGINAL} na pasta temporária nem no Cloud.")
         return
 
     # Obter a data de hoje (com zeros à esquerda)
@@ -2539,8 +2639,9 @@ def preencher_pdf(dados):
     # No teste.py, dentro de preencher_pdf(dados):
     uuid_pc = obter_uuid() # Função que já tens no código
     out_base = _safe_filename(f"{uuid_pc}_{dados.get('nif', '')}_{dados.get('nome_completo', '')}")
-    output_pdf = f"{out_base}.pdf"
-    doc = fitz.open(PDF_ORIGINAL)
+    import tempfile
+    output_pdf = os.path.join(tempfile.gettempdir(), f"{out_base}.pdf")
+    doc = fitz.open(pdf_template_path)
 
     # ==============================
     # 1) PÁGINA 1 (index 0) - campos
@@ -2628,7 +2729,7 @@ def preencher_pdf(dados):
 
     # Guardar o template original (limpo) da página 5 para duplicar
     # (abre um doc separado para inserir a página sem texto)
-    src_template = fitz.open(PDF_ORIGINAL)
+    src_template = fitz.open(pdf_template_path)
 
     # Se não houver portabilidades: remove página 5
     if len(portabilidades) == 0:
@@ -2749,7 +2850,7 @@ def preencher_pdf(dados):
     shift_after_tit = 0
 
     try:
-        src_template_tit = fitz.open(PDF_ORIGINAL)
+        src_template_tit = fitz.open(pdf_template_path)
 
         if len(titularidades) == 0:
             # Sem alterações => remove a página de titularidade para não ir em branco
@@ -2873,43 +2974,25 @@ def preencher_pdf(dados):
     else:
         primeiro_ultimo = dados["nome_completo"]
 
-    # 2. Caminhos para as pastas
-    pasta_rostos = "FOLHAS_ROSTO"
-    pasta_rc = "RC"               
-    
-    caminho_rosto = f"{pasta_rostos}/folha_rosto.pdf"
-    
-    # ===========================================================
-    # VERIFICAÇÃO DE RC DUPLICADA NA PASTA
-    # ===========================================================
-    num_rc = dados.get('num_rc', '').strip()
-    ficheiros_encontrados = []
-    caminho_rc = f"{pasta_rc}/{num_rc}.pdf" # Caminho por defeito
-    
-    # Só procura se a pasta existir e se o utilizador tiver preenchido o nº da RC
-    if os.path.exists(pasta_rc) and num_rc:
-        for ficheiro in os.listdir(pasta_rc):
-            # Procura por ficheiros que comecem pelo nº da RC e sejam PDF
-            if ficheiro.startswith(num_rc) and ficheiro.lower().endswith(".pdf"):
-                ficheiros_encontrados.append(ficheiro)
-    
-    # Lógica de aviso se houver mais que um
-    if len(ficheiros_encontrados) > 1:
-        resposta = messagebox.askyesno(
-            "RC Duplicada Encontrada!", 
-            f"Atenção! Encontrei {len(ficheiros_encontrados)} ficheiros para a RC {num_rc} na pasta '{pasta_rc}'.\n"
-            f"Isto acontece se descarregaste o ficheiro mais do que uma vez (ex: '{ficheiros_encontrados[1]}').\n\n"
-            f"Queres continuar e usar o ficheiro '{ficheiros_encontrados[0]}' ou preferes cancelar (NÃO) para ires limpar a pasta primeiro?"
-        )
-        if not resposta:
-            doc.close() # Importante: fechar o contrato base antes de cancelar
-            return # CANCELA A GERAÇÃO AQUI MESMO
-            
-        caminho_rc = f"{pasta_rc}/{ficheiros_encontrados[0]}"
-    elif len(ficheiros_encontrados) == 1:
-        caminho_rc = f"{pasta_rc}/{ficheiros_encontrados[0]}"
-    # ===========================================================
+    # 2. Caminhos
+    # Prioridade para Folha de Rosto: 1. Manualmente selecionada, 2. Cloud do Comercial (UUID), 3. Default
+    rosto_final_path = None
+    if globals().get("selected_rosto_path") and os.path.exists(globals()["selected_rosto_path"]):
+        rosto_final_path = globals()["selected_rosto_path"]
+    else:
+        # Tentar ir buscar a folha personalizada do comercial no Cloud pelo UUID
+        uuid_comercial = obter_uuid()
+        cloud_rosto_rel = f"FOLHA_ROSTO/{uuid_comercial}.pdf"
+        temp_rosto = ensure_local_file(cloud_rosto_rel)
+        # Se o ficheiro existir e tiver um tamanho mínimo (evitar erros de download vazio)
+        if os.path.exists(temp_rosto) and os.path.getsize(temp_rosto) > 5000:
+            rosto_final_path = temp_rosto
+        else:
+            # Fallback para o default
+            rosto_final_path = ensure_local_file("folha_rosto.pdf")
 
+    caminho_rosto = rosto_final_path
+    
     # 3. Abrir e preencher Folha de Rosto
     if not os.path.exists(caminho_rosto):
         messagebox.showwarning("Aviso", f"Folha de rosto não encontrada:\n{caminho_rosto}\nO contrato vai ser gerado sem ela.")
@@ -2970,12 +3053,24 @@ def preencher_pdf(dados):
         except Exception as e:
             print("Erro ao preencher rosto:", e)
 
-    # 4. Abrir RC
-    if not os.path.exists(caminho_rc):
-        messagebox.showwarning("Aviso", f"RC não encontrada:\n{caminho_rc}\nO contrato vai ser gerado sem ela.")
-        doc_rc = None
+    # 4. Abrir RC (Prioridade para a selecionada manualmente)
+    doc_rc = None
+    if globals().get("selected_rc_path") and os.path.exists(globals()["selected_rc_path"]):
+        doc_rc = fitz.open(globals()["selected_rc_path"])
     else:
-        doc_rc = fitz.open(caminho_rc)
+        # Se não foi selecionada manualmente, tentar ir buscar à Cloud (ou pasta temporária)
+        num_rc = dados.get("num_rc", "").strip()
+        if num_rc:
+            # Primeiro verificamos se já está na pasta temporária (usando o utilitário)
+            rc_cloud_path = f"RCS_VENDEDORES/{num_rc}.pdf"
+            local_rc_downloaded = ensure_local_file(rc_cloud_path)
+            if os.path.exists(local_rc_downloaded) and os.path.getsize(local_rc_downloaded) > 1000:
+                doc_rc = fitz.open(local_rc_downloaded)
+                print(f"✅ RC recuperada da Cloud/Temp com sucesso!")
+    
+    if not doc_rc:
+        num_rc_aviso = dados.get("num_rc", "S_NUM")
+        messagebox.showwarning("Aviso", f"RC {num_rc_aviso} não encontrada (nem selecionada nem no Cloud).\nO contrato vai ser gerado sem ela.")
 
     # 5. Juntar tudo num PDF final vazio
     doc_final = fitz.Document()
@@ -2991,9 +3086,41 @@ def preencher_pdf(dados):
     # No teste.py, dentro de preencher_pdf(dados):
     uuid_pc = obter_uuid() # Função que já tens no código
     out_base = _safe_filename(f"{uuid_pc}_{dados.get('nif', '')}_{dados.get('nome_completo', '')}")
-    output_pdf = f"pdf_novo_{out_base}.pdf" 
+    output_pdf = os.path.join(tempfile.gettempdir(), f"pdf_novo_{out_base}.pdf")
 
     doc_final.save(output_pdf, garbage=4, deflate=True)
+
+    # === UPLOAD RC PARA GITHUB (NOVO) ===
+    if globals().get("selected_rc_path"):
+        local_rc = globals().get("selected_rc_path")
+        num_rc = dados.get("num_rc", "S_NUM")
+        # Guardar apenas pelo ID (Nº da RC) conforme pedido
+        remote_filename = f"RCS_VENDEDORES/{num_rc}.pdf"
+        
+        # Thread para não bloquear a UI durante o upload
+        threading.Thread(target=lambda: upload_to_github(local_rc, remote_filename), daemon=True).start()
+        
+        # Reset para a próxima utilização
+        globals()["selected_rc_path"] = None
+        try:
+            btn_rc.configure(text="Procurar PDF")
+        except Exception:
+            pass
+
+    # === UPLOAD FOLHA DE ROSTO SELECIONADA (NOVO) ===
+    # Estava dentro do IF do RC por erro, agora está fora para funcionar sempre!
+    if globals().get("selected_rosto_path"):
+        local_rosto = globals().get("selected_rosto_path")
+        uuid_comercial = obter_uuid()
+        remote_rosto_path = f"FOLHA_ROSTO/{uuid_comercial}.pdf"
+        print(f"☁️ A atualizar a tua Folha de Rosto personalizada no Cloud...")
+        
+        def _upload_and_reset_rosto():
+            if upload_to_github(local_rosto, remote_rosto_path):
+                # Limpar após upload com sucesso para não repetir
+                globals()["selected_rosto_path"] = None
+
+        threading.Thread(target=_upload_and_reset_rosto, daemon=True).start()
 
     # 7. Fechar os documentos da memória
     doc_final.close()
@@ -3001,8 +3128,22 @@ def preencher_pdf(dados):
     if doc_rc: doc_rc.close()
     doc.close()
 
+    def abrir_documento(filepath):
+        """Abre um ficheiro de forma cross-platform (Windows, Mac, Linux)."""
+        import platform
+        import subprocess
+        try:
+            if platform.system() == 'Darwin':       # macOS
+                subprocess.call(('open', filepath))
+            elif platform.system() == 'Windows':    # Windows
+                os.startfile(filepath)
+            else:                                   # Linux variants
+                subprocess.call(('xdg-open', filepath))
+        except Exception as e:
+            print(f"Erro ao abrir ficheiro: {e}")
+
     messagebox.showinfo("PRONTO!", f"Documento final (Rosto + RC + Contrato) gerado com sucesso!\n{output_pdf}")
-    os.startfile(output_pdf)
+    abrir_documento(output_pdf)
 # ======================= FUNÇÃO GERAR CONTRATO =======================
 
 def gerar():
@@ -3365,11 +3506,10 @@ def gerar():
 
 # ======================= FUNÇÃO PRINCIPAL (INTERFACE) =======================
 def abrir_interface(nome, ssfid, janela=None):
-    """Abre a interface principal.
-
-    Nota: se 'janela' for fornecida, a interface é construída na mesma janela
-    (evita destruir a aplicação e erros de estilo do ttkbootstrap).
-    """
+    """Abre a interface principal."""
+    global selected_rc_path, selected_rosto_path
+    selected_rc_path = None
+    selected_rosto_path = None
 
     if janela is None:
         janela = tk.Tk()
@@ -3390,6 +3530,12 @@ def abrir_interface(nome, ssfid, janela=None):
     
     # Esconder a janela em vez de fechar a app quando o utilizador clica no X
     janela.protocol("WM_DELETE_WINDOW", janela.withdraw)
+
+    # Bloquear o scroll do rato nas Combobox para evitar mudanças acidentais (pedido do supervisor)
+    # Isto impede que o valor mude ao rodar a roda do rato por cima da caixa.
+    janela.bind_class("TCombobox", "<MouseWheel>", lambda e: "break")
+    janela.bind_class("TCombobox", "<Button-4>", lambda e: "break")
+    janela.bind_class("TCombobox", "<Button-5>", lambda e: "break")
 
     # ===================== SHEETS BRIDGE (SCHEDULER) =====================
     # Só corre em Windows e apenas para vendedores com mac=0.
@@ -3511,7 +3657,7 @@ def abrir_interface(nome, ssfid, janela=None):
     aba_eurus = ttk.Frame(notebook)
     notebook.add(aba_gerar, text="📝 Gerar Contrato")
     notebook.add(aba_lista, text="📂 Contratos Gerados")
-    notebook.add(aba_melhorias, text="🛠 Melho")
+    notebook.add(aba_melhorias, text="🛠 Melhorias")
     
     # notebook.add(aba_eurus, text="🤖 EURUS")
 
@@ -4243,7 +4389,7 @@ def abrir_interface(nome, ssfid, janela=None):
 
     tk.Label(
         title_box,
-        text="CONTRATO VODAFONE - PREENCHIMENTO PERFEITO",
+        text="CONTRATO VODAFONE - PREENCHIMENTO PERFEITO (V 1.2.1)",
         bg=VDF_BG,
         fg=VDF_TEXT,
         font=("Arial", 14, "bold")
@@ -4401,9 +4547,56 @@ def abrir_interface(nome, ssfid, janela=None):
 
     # === CAMPOS COMEÇA DADOS FA ===
 
+    def selecionar_rc_local():
+        global selected_rc_path
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
+        if path:
+            selected_rc_path = path
+            btn_rc.configure(text="✅ RC Selecionada")
+            
+            # Meter o nome do ficheiro (sem extensão) na caixa de texto
+            filename = os.path.basename(path).replace(".pdf", "").replace(".PDF", "")
+            entry_num_rc.delete(0, "end")
+            entry_num_rc.insert(0, filename)
+            
+            print(f"📂 RC Local selecionada: {path}")
+
+    def selecionar_rosto_local():
+        global selected_rosto_path
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
+        if path:
+            selected_rosto_path = path
+            btn_rosto.configure(text="✅ Rosto Selecionado")
+            print(f"📂 Folha de Rosto Local selecionada: {path}")
+
     ttk.Label(frame, text="DADOS DO VENDEDOR E RC", style="Section.TLabel").pack(anchor="w", pady=(0, 8))
+    
+    # Linha customizada para Nº da RC com botão
+    row_rc = tk.Frame(frame, bg=VDF_CARD)
+    row_rc.pack(fill="x", pady=6)
+    ttk.Label(row_rc, text="Nº da RC *", width=55, anchor="w").pack(side="left", padx=(2, 10))
+    
     global entry_tel_vendedor, entry_num_rc
-    entry_num_rc = linha("Nº da RC")
+    entry_num_rc = ttk.Entry(row_rc, width=40, font=("Arial", 11))
+    entry_num_rc.pack(side="left", padx=10)
+    
+    btn_rc = ttk.Button(row_rc, text="Procurar PDF", command=selecionar_rc_local)
+    btn_rc.pack(side="left", padx=5)
+
+    # Nova Linha: Folha de Rosto Personalizada
+    row_rosto = tk.Frame(frame, bg=VDF_CARD)
+    row_rosto.pack(fill="x", pady=6)
+    ttk.Label(row_rosto, text="Folha de Rosto (Assinatura)", width=55, anchor="w").pack(side="left", padx=(2, 10))
+    
+    global btn_rosto
+    btn_rosto = ttk.Button(row_rosto, text="Selecionar Minha Assinatura", command=selecionar_rosto_local)
+    btn_rosto.pack(side="left", padx=10)
+    
+    # Label informativa (Uuid.pdf)
+    lbl_rosto_info = ttk.Label(row_rosto, text="(ficheiro descarregado automaticamente da Cloud caso que tenha inserido alguma venda)", font=("Arial", 8), foreground="gray")
+    lbl_rosto_info.pack(side="left")
 
     ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=16)
 
@@ -5778,6 +5971,23 @@ def abrir_interface(nome, ssfid, janela=None):
         # Render inicial (sem filtros)
         aplicar_filtro()
 
+    # === AUTO-LOAD FOLHA DE ROSTO (STARTUP) ===
+    def _auto_load_rosto():
+        try:
+            uuid_com = obter_uuid()
+            path_rel = f"FOLHA_ROSTO/{uuid_com}.pdf"
+            local_p = ensure_local_file(path_rel)
+            if os.path.exists(local_p) and os.path.getsize(local_p) > 5000:
+                globals()["selected_rosto_path"] = local_p
+                try:
+                    btn_rosto.configure(text="✅ Rosto Carregado (Cloud)")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    
+    threading.Thread(target=_auto_load_rosto, daemon=True).start()
+
     carregar_contratos()
     janela.mainloop()
 
@@ -6258,9 +6468,97 @@ def abrir_login():
             globals()['CURRENT_VENDEDOR_MAC'] = 1 if sys.platform == 'darwin' else 0
         abrir_interface(next_user['nome'], next_user['sfid'])
 
+def check_single_instance():
+    """Garante que apenas uma instância da app está a correr."""
+    # Usar o UUID no nome do ficheiro para ser único por PC
+    lock_file = os.path.join(tempfile.gettempdir(), f"vdf_app_lock_{MEU_UUID}.lock")
+    try:
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+            except Exception:
+                # Se falhar ao remover, é porque outra instância o tem aberto
+                # Criar uma mini janela só para mostrar o erro e sair
+                root = tk.Tk()
+                root.withdraw()
+                messagebox.showwarning("Aviso", "A aplicação já está aberta!\nVerifica se o programa já não está a correr na barra de tarefas.")
+                root.destroy()
+                sys.exit(0)
+        
+        # Cria e mantém o ficheiro aberto para "bloquear"
+        # Guardamos a referência numa global para o ficheiro não ser fechado pelo GC
+        globals()['_single_instance_lock_file'] = open(lock_file, 'w')
+        globals()['_single_instance_lock_file'].write(str(os.getpid()))
+        globals()['_single_instance_lock_file'].flush()
+    except Exception as e:
+        print(f"Erro no single instance: {e}")
+
+def mostrar_splash():
+    """Cria uma janela de carregamento profissional com estilo Vodafone."""
+    splash = tk.Tk()
+    splash.title("Vodafone Tool - A carregar")
+    
+    # Dimensões e Centralização
+    w, h = 450, 300
+    ws = splash.winfo_screenwidth()
+    hs = splash.winfo_screenheight()
+    x = (ws/2) - (w/2)
+    y = (hs/2) - (h/2)
+    splash.geometry('%dx%d+%d+%d' % (w, h, x, y))
+    
+    splash.overrideredirect(True) # Remove as bordas da janela
+    splash.configure(bg="#E60000") # Vermelho Vodafone
+    
+    # Layout do Splash (Container com borda branca fina)
+    main_frame = tk.Frame(splash, bg="#E60000", highlightthickness=2, highlightbackground="white")
+    main_frame.pack(fill="both", expand=True)
+    
+    # Texto Central
+    tk.Label(main_frame, text="VODAFONE", font=("Arial", 38, "bold"), fg="white", bg="#E60000").pack(pady=(60, 5))
+    tk.Label(main_frame, text="FERRAMENTA DE VENDAS", font=("Arial", 14, "bold"), fg="#FFCCCC", bg="#E60000").pack()
+    
+    # Barra de Progresso Customizada (usando Canvas para ser 100% seguro contra erros de estilo)
+    canvas_bar = tk.Canvas(main_frame, width=300, height=4, bg="#B80000", highlightthickness=0)
+    canvas_bar.pack(pady=(40, 10))
+    
+    # Desenhar o retângulo que se move (efeito loading)
+    bar_rect = canvas_bar.create_rectangle(0, 0, 80, 4, fill="white", outline="")
+    
+    def animar_progresso(pos=-80):
+        try:
+            if splash.winfo_exists():
+                nova_pos = pos + 5
+                if nova_pos > 300:
+                    nova_pos = -80
+                canvas_bar.coords(bar_rect, nova_pos, 0, nova_pos + 80, 4)
+                splash.after(20, lambda: animar_progresso(nova_pos))
+        except Exception:
+            pass
+            
+    animar_progresso()
+    
+    # Rodapé
+    tk.Label(main_frame, text="A inicializar módulos e base de dados...", font=("Arial", 9), fg="white", bg="#E60000").pack(side="bottom", pady=20)
+    
+    splash.update()
+    return splash
+
 # ======================= INICIAR APP =======================
 if __name__ == "__main__":
-    abrir_login()
+    # 1. Impedir múltiplas aberturas
+    check_single_instance()
+    
+    # 2. Mostrar tela de carregamento (Splash)
+    splash_win = mostrar_splash()
+    
+    # 3. Pequeno delay para a tela ser visível e carregar recursos
+    # Depois destrói o splash e abre o login normal
+    def carregar_e_abrir():
+        splash_win.destroy()
+        abrir_login()
+        
+    splash_win.after(2500, carregar_e_abrir)
+    splash_win.mainloop()
 
     # cod completo é este e esta complementado com AI
 
