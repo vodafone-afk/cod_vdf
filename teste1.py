@@ -713,7 +713,7 @@ DB_CONFIG = {
 
 # ====================== GITHUB CLOUD CONFIG ======================
 GITHUB_BASE_URL = "https://raw.githubusercontent.com/vodafone-afk/cod_vdf/main/"
-GITHUB_TOKEN = "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"
+GITHUB_TOKEN = "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"
 GITHUB_REPO = "vodafone-afk/cod_vdf"
 
 def upload_to_github(local_path: str, remote_path: str):
