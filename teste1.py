@@ -61,6 +61,7 @@ import math
 import glob
 import sys
 import tempfile
+import socket
 from typing import List, Tuple, Optional
 
 from telegram import Update
@@ -3530,6 +3531,9 @@ def abrir_interface(nome, ssfid, janela=None):
     
     # Esconder a janela em vez de fechar a app quando o utilizador clica no X
     janela.protocol("WM_DELETE_WINDOW", janela.withdraw)
+    
+    # Guardar o handle para o sistema de restauro automático
+    globals()['MAIN_WINDOW_HANDLE'] = janela
 
     # Bloquear o scroll do rato nas Combobox para evitar mudanças acidentais (pedido do supervisor)
     # Isto impede que o valor mude ao rodar a roda do rato por cima da caixa.
@@ -6342,6 +6346,9 @@ def abrir_login():
     login.geometry("480x620")
     login.resizable(False, False)
     
+    # Guardar handle para o restauro automático funcionar também no login
+    globals()['LOGIN_WINDOW_HANDLE'] = login
+    
     # Esconder a janela em vez de fechar a app quando o utilizador clica no X
     login.protocol("WM_DELETE_WINDOW", login.withdraw)
 
@@ -6469,29 +6476,56 @@ def abrir_login():
         abrir_interface(next_user['nome'], next_user['sfid'])
 
 def check_single_instance():
-    """Garante que apenas uma instância da app está a correr."""
-    # Usar o UUID no nome do ficheiro para ser único por PC
-    lock_file = os.path.join(tempfile.gettempdir(), f"vdf_app_lock_{MEU_UUID}.lock")
+    """Garante que apenas uma instância da app corre e restaura a anterior se necessário."""
+    import socket
+    # Usar uma porta fixa (54321). Se der erro, é porque já está ocupada pela outra instância.
+    port = 54321
     try:
-        if os.path.exists(lock_file):
-            try:
-                os.remove(lock_file)
-            except Exception:
-                # Se falhar ao remover, é porque outra instância o tem aberto
-                # Criar uma mini janela só para mostrar o erro e sair
-                root = tk.Tk()
-                root.withdraw()
-                messagebox.showwarning("Aviso", "A aplicação já está aberta!\nVerifica se o programa já não está a correr na barra de tarefas.")
-                root.destroy()
-                sys.exit(0)
+        # 1. Tentar criar um servidor local na porta
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.bind(('127.0.0.1', port))
+        server.listen(1)
         
-        # Cria e mantém o ficheiro aberto para "bloquear"
-        # Guardamos a referência numa global para o ficheiro não ser fechado pelo GC
-        globals()['_single_instance_lock_file'] = open(lock_file, 'w')
-        globals()['_single_instance_lock_file'].write(str(os.getpid()))
-        globals()['_single_instance_lock_file'].flush()
-    except Exception as e:
-        print(f"Erro no single instance: {e}")
+        # Guardar o socket global para o sistema não fechar a ligação
+        globals()['_single_instance_server'] = server
+        
+        # 2. Thread que fica à espera de pedidos da "segunda instância"
+        def listen_restore():
+            while True:
+                try:
+                    conn, _ = server.accept()
+                    msg = conn.recv(1024).decode()
+                    if msg == "RESTORE":
+                        # Ir buscar a janela que está em memória
+                        handle = globals().get('MAIN_WINDOW_HANDLE')
+                        if handle:
+                            # Pedir à janela para aparecer (deiconify) e vir para a frente
+                            handle.after(0, lambda: [handle.deiconify(), handle.lift(), handle.focus_force()])
+                        else:
+                            # Se a janela principal ainda não existir (está no login), tenta o login
+                            login_win = globals().get('LOGIN_WINDOW_HANDLE')
+                            if login_win:
+                                login_win.after(0, lambda: [login_win.deiconify(), login_win.lift(), login_win.focus_force()])
+                    conn.close()
+                except Exception:
+                    break
+        
+        threading.Thread(target=listen_restore, daemon=True).start()
+        return True
+        
+    except socket.error:
+        # 3. Porta ocupada -> Já existe uma app aberta! 
+        # Vamos apenas avisar a app original para "aparecer" e fechar esta nova.
+        try:
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.settimeout(2)
+            client.connect(('127.0.0.1', port))
+            client.send("RESTORE".encode())
+            client.close()
+        except Exception:
+            pass
+        # Fecha esta segunda instância sem fazer nada
+        sys.exit(0)
 
 def mostrar_splash():
     """Cria uma janela de carregamento profissional com estilo Vodafone."""
