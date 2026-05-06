@@ -763,19 +763,36 @@ def upload_to_github(local_path: str, remote_path: str):
         with urllib.request.urlopen(req, timeout=20) as resp:
             if resp.status in [200, 201]:
                 print(f"✅ Upload concluído com sucesso para o GitHub: {remote_path}")
+                # Mostrar sucesso silencioso no log
                 return True
             else:
-                print(f"⚠️ Resposta do GitHub: {resp.status}")
+                msg = f"Erro no GitHub: Status {resp.status}"
+                print(f"⚠️ {msg}")
+                _mostrar_erro_upload(msg)
                 return False
     except urllib.error.HTTPError as e:
         error_body = e.read().decode()
-        print(f"❌ Erro HTTP no upload ({e.code}): {error_body}")
-        if e.code == 403:
-            print("💡 Dica: Verifica se o teu Token tem permissões de 'Contents: Read and Write'.")
+        msg = f"Erro HTTP {e.code}: {error_body}"
+        print(f"❌ {msg}")
+        _mostrar_erro_upload(msg)
         return False
     except Exception as e:
-        print(f"❌ Erro inesperado no upload: {e}")
+        msg = f"Erro inesperado: {e}"
+        print(f"❌ {msg}")
+        _mostrar_erro_upload(msg)
         return False
+
+def _mostrar_erro_upload(mensagem):
+    """Mostra o erro na interface gráfica de forma segura (via main thread)."""
+    try:
+        from tkinter import messagebox
+        root = globals().get('MAIN_WINDOW_HANDLE') or globals().get('LOGIN_WINDOW_HANDLE')
+        if root:
+            # Usar after(0, ...) para chamar o messagebox na thread principal do Tkinter
+            root.after(0, lambda: messagebox.showerror("Erro de Cloud (GitHub)", 
+                f"O ficheiro não foi guardado na Cloud!\n\nDetalhe:\n{mensagem}\n\nVerifica a tua ligação à Internet."))
+    except:
+        pass
 
 def ensure_local_file(relative_path: str) -> str:
     """Verifica se um ficheiro existe localmente na pasta temporária. Se não, descarrega-o."""
