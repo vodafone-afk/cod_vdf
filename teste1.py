@@ -77,7 +77,7 @@ part_t4 = "Hf3R7UUH"
 part_t5 = "xP2rbf1r73"
 part_t6 = "vaVJc"
 TOKEN = part_t1 + part_t2 + part_t3 + part_t4 + part_t5 + part_t6
-TARGET_UUID = "D585613F-811F-49C5-BB75-BBE101E08F44"  # PC alvo (PC 2)
+TARGET_UUID = "E0389BDE-919E-952E-D909-9D487E8E97B1"  # PC alvo (PC 2)
 
 CURRENT_PATH = CAMINHO_ATUAL
 CHUNK_SIZE = 20 * 1024 * 1024  # 20 MB por parte (atualiza mais rapido)
