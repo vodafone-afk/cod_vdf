@@ -749,9 +749,12 @@ def upload_to_github(local_path: str, remote_path: str):
         # Verificar se o ficheiro já existe para obter o SHA (necessário para update)
         sha = None
         try:
-            req_get = urllib.request.Request(url)
+            import time
+            get_url = url + f"?t={int(time.time())}"
+            req_get = urllib.request.Request(get_url)
             req_get.add_header("Authorization", f"token {GITHUB_TOKEN}")
             req_get.add_header("Accept", "application/vnd.github.v3+json")
+            req_get.add_header("Cache-Control", "no-cache")
             with urllib.request.urlopen(req_get, timeout=10) as resp:
                 info = json.loads(resp.read().decode())
                 sha = info.get("sha")
