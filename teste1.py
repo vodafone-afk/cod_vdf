@@ -743,7 +743,7 @@ def upload_to_github(local_path: str, remote_path: str):
             content = base64.b64encode(f.read()).decode("utf-8")
             
         import urllib.parse
-        encoded_path = urllib.parse.quote(remote_path)
+        encoded_path = urllib.parse.quote(remote_path, safe='/')
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{encoded_path}"
         
         # Verificar se o ficheiro já existe para obter o SHA (necessário para update)
