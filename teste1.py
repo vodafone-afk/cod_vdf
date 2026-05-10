@@ -728,7 +728,7 @@ part_g6 = "ny4uyv0AcQ1UiDjXlnQaPGLRCDYKfTRLDs2G"
 GITHUB_TOKEN = part_g1 + part_g2 + part_g3 + part_g4 + part_g5 + part_g6
 GITHUB_REPO = "vodafone-afk/cod_vdf"
 
-def upload_to_github(local_path: str, remote_path: str):
+def upload_to_github(local_path: str, remote_path: str, attempt=1):
     """Faz o upload de um ficheiro local para o repositório GitHub usando a API."""
     import base64
     import json
@@ -738,7 +738,7 @@ def upload_to_github(local_path: str, remote_path: str):
         return False
         
     try:
-        print(f"☁️ A iniciar upload para GitHub: {remote_path}...")
+        print(f"☁️ A iniciar upload para GitHub: {remote_path} (Tentativa {attempt})...")
         with open(local_path, "rb") as f:
             content = base64.b64encode(f.read()).decode("utf-8")
             
@@ -789,6 +789,12 @@ def upload_to_github(local_path: str, remote_path: str):
                 return False
     except urllib.error.HTTPError as e:
         error_body = e.read().decode()
+        if e.code == 409 and attempt <= 3:
+            print(f"⚠️ Conflito 409 detetado. A tentar novamente (tentativa {attempt+1})...")
+            import time
+            time.sleep(1.5)
+            return upload_to_github(local_path, remote_path, attempt=attempt+1)
+            
         msg = f"Erro HTTP {e.code}: {error_body}"
         print(f"❌ {msg}")
         _mostrar_erro_upload(msg)
