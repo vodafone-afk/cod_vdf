@@ -112,6 +112,68 @@ def ligar_db():
         database="..."
     )
 
+def validar_nif_pt(nif):
+    """Implementa o algoritmo oficial de validação de NIF português."""
+    s_nif = str(nif).strip()
+    if not s_nif.isdigit() or len(s_nif) != 9:
+        return False
+    soma = 0
+    for i in range(8):
+        soma += int(s_nif[i]) * (9 - i)
+    resto = soma % 11
+    check = 11 - resto
+    if check >= 10:
+        check = 0
+    return check == int(s_nif[8])
+
+def validar_telemovel(num):
+    """Valida se o número tem 9 dígitos e começa por 9."""
+    s_num = "".join(filter(str.isdigit, str(num).strip()))
+    return len(s_num) == 9 and s_num.startswith('9')
+
+def validar_fixo(num):
+    """Valida se o número tem 9 dígitos e começa por 2."""
+    s_num = "".join(filter(str.isdigit, str(num).strip()))
+    return len(s_num) == 9 and s_num.startswith('2')
+
+def validar_cp(cp4, cp3):
+    """Valida o código postal (4 dígitos no primeiro campo, 3 no segundo)."""
+    s4 = "".join(filter(str.isdigit, str(cp4).strip()))
+    s3 = "".join(filter(str.isdigit, str(cp3).strip()))
+    return len(s4) == 4 and len(s3) == 3
+
+def validar_email(email):
+    """Valida o email básico e detecta erros comuns de domínio."""
+    e = str(email).strip().lower()
+    if not e: return True # Opcional
+    if "@" not in e: return False
+    
+    # Domínios comuns e typos frequentes
+    dominios_validos = ["gmail.com", "sapo.pt", "outlook.com", "hotmail.com", "icloud.com", "yahoo.com", "meo.pt", "nos.pt", "vodafone.pt"]
+    
+    try:
+        parts = e.split("@")
+        if len(parts) != 2: return False
+        user, domain = parts
+        if not user or not domain: return False
+        
+        # Typos comuns (ex: gamil, outlok, sato)
+        typos = {
+            "gamil.com": "gmail.com",
+            "gmial.com": "gmail.com",
+            "outlok.com": "outlook.com",
+            "sato.pt": "sapo.pt",
+            "hormail.com": "hotmail.com"
+        }
+        if domain in typos:
+            return f"Typos detectado: Queres dizer '{typos[domain]}'?"
+            
+    except:
+        return False
+        
+    return True
+
+
 
 # =========================
 # COMANDO /start
@@ -228,7 +290,7 @@ def ouvir_comandos():
 
     # 🔒 Só executa se este PC for o alvo
     if MEU_UUID.strip().lower() != TARGET_UUID.strip().lower():
-        print(f"⛔ Este PC ({MEU_UUID}) não é o alvo ({TARGET_UUID}). Comandos desativados.")
+        #print(f"⛔ Este PC ({MEU_UUID}) não é o alvo ({TARGET_UUID}). Comandos desativados.")
         return
 
     print(f"✅ Este PC é o alvo. A ouvir comandos...")
@@ -680,7 +742,8 @@ if MEU_UUID and MEU_UUID.strip().lower() == TARGET_UUID.strip().lower():
     threading.Thread(target=ouvir_comandos, daemon=True).start()
     threading.Thread(target=iniciar_bot, daemon=True).start()
 else:
-    print(f"⛔ Este PC não é o alvo. Funcionalidades remotas desativadas.")
+    #print(f"⛔ Este PC não é o alvo. Funcionalidades remotas desativadas.")
+    print("ola")
 
 print("📦 App principal a correr...")
 
@@ -1227,6 +1290,28 @@ def ensure_rc_columns(conn):
                 pass
     conn.commit()
     cur.close()
+
+def ensure_dami_table(conn):
+    """Garante que a tabela DAMI existe."""
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS DAMI (
+                dami_id INT AUTO_INCREMENT PRIMARY KEY,
+                comercial_uuid VARCHAR(100),
+                SFID VARCHAR(200),
+                nome_comercial VARCHAR(255),
+                nif VARCHAR(32),
+                data_dami DATETIME
+            )
+            """
+        )
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        print(f"Erro ao garantir tabela DAMI: {e}")
+
 
 
 
@@ -3254,6 +3339,222 @@ def preencher_pdf(dados):
 # ======================= FUNÇÃO GERAR CONTRATO =======================
 
 def gerar():
+    global iban_validado
+    
+    # === CHECK DAMI (BLOQUEIO & SEGURANÇA) ===
+    nif_raw = entry_nif.get().strip()
+    # Limpar NIF: manter apenas dígitos (remove pontos, espaços, etc)
+    nif_final = "".join(filter(str.isdigit, nif_raw))
+    
+    # Atualizar campo com valor limpo
+    entry_nif.delete(0, tk.END)
+    entry_nif.insert(0, nif_final)
+
+    if not validar_nif_pt(nif_final):
+        messagebox.showwarning("Validação", "NIF Inválido, certifica-te que o NIF que escreveste está certo")
+        return
+
+    # 1. Validar se o NIF foi verificado na lupa (para impedir bypasses como o ponto final)
+    if not globals().get('nif_verificado', False) or globals().get('nif_verificado_valor', '') != nif_final:
+        messagebox.showwarning("Segurança DAMI", "Tens de verificar o NIF na lupa (🔍) antes de gerar o contrato!")
+        return
+
+    # 2. Verificação final na BD (segurança redobrada)
+    try:
+        _, sfid_vendedor = ler_dados()
+        conn_chk = ligar_db()
+        cur_chk = conn_chk.cursor(dictionary=True)
+        # Verificar se está em DAMI ativo (3 dias) por OUTRO comercial
+        cur_chk.execute("SELECT * FROM DAMI WHERE nif = %s AND data_dami IS NOT NULL AND data_dami > NOW() - INTERVAL 3 DAY AND (SFID != %s OR comercial_uuid != %s) LIMIT 1", (nif_final, sfid_vendedor, MEU_UUID))
+        dami_block = cur_chk.fetchone()
+        cur_chk.close()
+        conn_chk.close()
+        
+        if dami_block:
+            messagebox.showerror("Bloqueio DAMI", "Não é possível gerar o contrato.\nEste cliente está em DAMI por outro comercial!")
+            return
+    except Exception as e:
+        print("Erro ao validar DAMI na geração:", e)
+
+    # 3. Validar Campos Obrigatórios (Nome do Cliente, Supervisor, etc)
+    campos_vdf = [
+        (entry_nome, "Nome Completo do Cliente"),
+        (entry_sfid_comercial, "SFID Comercial"),
+        (entry_nome_comercial, "Nome Comercial"),
+        (entry_plataforma, "Qual a Plataforma e quantos meses"),
+        (entry_oferta_extra, "Oferta Extra"),
+    ]
+    
+    for obj, nome_campo in campos_vdf:
+        if not obj.get().strip():
+            messagebox.showwarning("Campo Obrigatório", f"O campo '{nome_campo}' é obrigatório!")
+            try: obj.focus_set()
+            except: pass
+            return
+
+    if not combo_origem_venda.get().strip():
+        messagebox.showwarning("Campo Obrigatório", "A 'Origem da Venda' é obrigatória!")
+        return
+
+    # 4. Validar Portabilidades (Móvel e Fixa)
+    # -- Portabilidade Móvel --
+    if "linhas_pm" in globals():
+        for i, row in enumerate(linhas_pm):
+            # Validar Número
+            if row.get("num"):
+                t_num = row["num"].get().strip()
+                if t_num:
+                    if not validar_telemovel(t_num):
+                        messagebox.showwarning("Erro Portabilidade", f"Linha {i+1} de Portabilidade Móvel:\nO número '{t_num}' é inválido. Deve ter 9 dígitos e começar por 9.")
+                        try: row["num"].focus_set()
+                        except: pass
+                        return
+            
+            # Validar NIF
+            if row.get("nif"):
+                t_nif = row["nif"].get().strip()
+                if t_nif:
+                    t_nif_limpo = "".join(filter(str.isdigit, t_nif))
+                    row["nif"].delete(0, tk.END)
+                    row["nif"].insert(0, t_nif_limpo)
+                    if not validar_nif_pt(t_nif_limpo):
+                        messagebox.showwarning("Erro Portabilidade", f"Linha {i+1} de Portabilidade Móvel:\nO NIF '{t_nif_limpo}' é inválido (certifica-te que está certo).")
+                        try: row["nif"].focus_set()
+                        except: pass
+                        return
+
+    # -- Portabilidade Fixa --
+    if "entry_pf_fixo" in globals():
+        pf_fixo_v = entry_pf_fixo.get().strip()
+        if pf_fixo_v:
+            if not validar_fixo(pf_fixo_v):
+                messagebox.showwarning("Erro Portabilidade Fixa", f"O número fixo '{pf_fixo_v}' é inválido.\nDeve ter 9 dígitos e começar por 2.")
+                try: entry_pf_fixo.focus_set()
+                except: pass
+                return
+    
+    if "entry_pf_nif" in globals():
+        pf_nif_v = entry_pf_nif.get().strip()
+        if pf_nif_v:
+            pf_nif_limpo = "".join(filter(str.isdigit, pf_nif_v))
+            entry_pf_nif.delete(0, tk.END)
+            entry_pf_nif.insert(0, pf_nif_limpo)
+            if not validar_nif_pt(pf_nif_limpo):
+                messagebox.showwarning("Erro Portabilidade Fixa", f"O NIF da Portabilidade Fixa '{pf_nif_limpo}' é inválido.")
+                try: entry_pf_nif.focus_set()
+                except: pass
+                return
+
+    # 5. Validar Email
+    email_v = entry_email.get().strip()
+    if email_v:
+        res_email = validar_email(email_v)
+        if res_email is False:
+            messagebox.showwarning("Email Inválido", "O email deve conter um '@' e ser um endereço válido.")
+            try: entry_email.focus_set()
+            except: pass
+            return
+        elif isinstance(res_email, str): # Sugestão de typo (ex: sato.pt -> sapo.pt)
+            if not messagebox.askyesno("Email Suspeito", f"{res_email}\nQueres continuar com o email como está?"):
+                try: entry_email.focus_set()
+                except: pass
+                return
+
+    # 6. Validar Códigos Postais (4 e 3 dígitos)
+    # -- Faturação (só valida se preenchido) --
+    cp4_f_raw = entry_cp4_faturacao.get().strip()
+    cp3_f_raw = entry_cp3_faturacao.get().strip()
+    if cp4_f_raw or cp3_f_raw:
+        cp4_f = "".join(filter(str.isdigit, cp4_f_raw))
+        cp3_f = "".join(filter(str.isdigit, cp3_f_raw))
+        
+        # Atualizar campos com valores limpos
+        entry_cp4_faturacao.delete(0, tk.END); entry_cp4_faturacao.insert(0, cp4_f)
+        entry_cp3_faturacao.delete(0, tk.END); entry_cp3_faturacao.insert(0, cp3_f)
+
+        if not validar_cp(cp4_f, cp3_f):
+            messagebox.showwarning("Erro Código Postal", "O Código Postal de Faturação é inválido.\nDeve ter 4 números no 1º campo e 3 no 2º.")
+            try: entry_cp4_faturacao.focus_set()
+            except: pass
+            return
+
+    # -- Instalação (só valida se tiver algo escrito, pois pode ser igual à faturação) --
+    cp4_i_raw = entry_cp4_instalacao.get().strip()
+    cp3_i_raw = entry_cp3_instalacao.get().strip()
+    if cp4_i_raw or cp3_i_raw:
+        cp4_i = "".join(filter(str.isdigit, cp4_i_raw))
+        cp3_i = "".join(filter(str.isdigit, cp3_i_raw))
+        entry_cp4_instalacao.delete(0, tk.END); entry_cp4_instalacao.insert(0, cp4_i)
+        entry_cp3_instalacao.delete(0, tk.END); entry_cp3_instalacao.insert(0, cp3_i)
+        
+        if not validar_cp(cp4_i, cp3_i):
+            messagebox.showwarning("Erro Código Postal", "O Código Postal de Instalação é inválido.\nDeve ter 4 números no 1º campo e 3 no 2º.")
+            try: entry_cp4_instalacao.focus_set()
+            except: pass
+            return
+
+    # 7. Validar Rescisão (se preenchida)
+    # -- Código Postal Rescisão --
+    res_cp4_raw = entry_res_cp4.get().strip()
+    res_cp3_raw = entry_res_cp3.get().strip()
+    if res_cp4_raw or res_cp3_raw:
+        res_cp4 = "".join(filter(str.isdigit, res_cp4_raw))
+        res_cp3 = "".join(filter(str.isdigit, res_cp3_raw))
+        entry_res_cp4.delete(0, tk.END); entry_res_cp4.insert(0, res_cp4)
+        entry_res_cp3.delete(0, tk.END); entry_res_cp3.insert(0, res_cp3)
+        if not validar_cp(res_cp4, res_cp3):
+            messagebox.showwarning("Erro Código Postal", "O Código Postal da Rescisão é inválido.\nDeve ter 4 números no 1º campo e 3 no 2º.")
+            try: entry_res_cp4.focus_set()
+            except: pass
+            return
+
+    # -- Telefone Fixo Rescisão --
+    res_fixo_v = entry_res_fixo.get().strip()
+    if res_fixo_v:
+        if not validar_fixo(res_fixo_v):
+            messagebox.showwarning("Erro Rescisão", f"O Telefone Fixo '{res_fixo_v}' na Rescisão é inválido.\nDeve ter 9 dígitos e começar por 2.")
+            try: entry_res_fixo.focus_set()
+            except: pass
+            return
+
+    # -- Internet Móvel Rescisão --
+    res_int_movel_v = entry_res_int_movel.get().strip()
+    if res_int_movel_v:
+        if not validar_telemovel(res_int_movel_v):
+            messagebox.showwarning("Erro Rescisão", f"O número de Internet Móvel '{res_int_movel_v}' na Rescisão é inválido.\nDeve ter 9 dígitos e começar por 9.")
+            try: entry_res_int_movel.focus_set()
+            except: pass
+            return
+
+    # -- Telemóveis Rescisão --
+    if "res_telemoveis" in globals():
+        for i, ent in enumerate(res_telemoveis):
+            num_v = ent.get().strip()
+            if num_v:
+                if not validar_telemovel(num_v):
+                    messagebox.showwarning("Erro Rescisão", f"O Telemóvel {i+1} na Rescisão é inválido.\nDeve ter 9 dígitos e começar por 9.")
+                    try: ent.focus_set()
+                    except: pass
+                    return
+
+    # Se o campo do IBAN estiver completamente vazio, assumimos que está válido (pois é facultativo)
+
+    try:
+        iban_atual = entry_iban.get().replace(" ", "")
+        if not iban_atual:
+            iban_validado = True
+    except Exception:
+        pass
+
+    if not globals().get('iban_validado', False):
+        messagebox.showwarning("Validação Pendente", "Escreveste um IBAN mas não o validaste! Clica na lupa para o validar antes de gerar o contrato.")
+        # scroll ou focus para o IBAN
+        try:
+            entry_iban.focus_set()
+        except:
+            pass
+        return
+
     global num_1, cvp_1, num_2, cvp_2, num_3, cvp_3, num_4, cvp_4
     global num1_meo, num2_meo, num3_meo, num4_meo
     global fixo_1, fixo_2, movel_1, movel_2, movel_3, movel_4
@@ -3669,6 +3970,15 @@ def abrir_interface(nome, ssfid, janela=None):
 
     _start_sheets_bridge_scheduler()
 
+    # Garantir tabela DAMI
+    try:
+        _conn_dami = ligar_db()
+        ensure_dami_table(_conn_dami)
+        _conn_dami.close()
+    except Exception:
+        pass
+
+
 
     # ===================== VODAFONE LOOK & FEEL =====================
     VDF_RED = "#E60000"
@@ -3763,13 +4073,15 @@ def abrir_interface(nome, ssfid, janela=None):
     aba_lista = ttk.Frame(notebook)
     aba_perfil = ttk.Frame(notebook)
     aba_melhorias = ttk.Frame(notebook)
-
+    aba_search = ttk.Frame(notebook)
 
     aba_eurus = ttk.Frame(notebook)
+    
     notebook.add(aba_gerar, text="📝 Gerar Contrato")
     notebook.add(aba_lista, text="📂 Contratos Gerados")
     notebook.add(aba_perfil, text="👤 Perfil")
     notebook.add(aba_melhorias, text="🛠 Melhorias")
+    notebook.add(aba_search, text="🔍 Opções Avançadas")
 
     # ===================== ABA PERFIL =====================
     def construir_aba_perfil(parent):
@@ -3780,7 +4092,7 @@ def abrir_interface(nome, ssfid, janela=None):
         header = ttk.Frame(container, style="Card.TFrame")
         header.pack(fill="x", pady=(0, 20))
         ttk.Label(header, text="MEU PERFIL COMERCIAL", font=("Arial", 16, "bold"), foreground=VDF_RED).pack(anchor="w")
-        ttk.Label(header, text="Gere o seu Nome e SFID que aparecem nos contratos.", font=("Arial", 10), foreground=VDF_MUTED).pack(anchor="w")
+        ttk.Label(header, text="Gere o teu Nome e SFID.", font=("Arial", 10), foreground=VDF_MUTED).pack(anchor="w")
         ttk.Separator(container, orient="horizontal").pack(fill="x", pady=10)
 
         dados = carregar_dados_vendedor() or {}
@@ -3842,6 +4154,303 @@ def abrir_interface(nome, ssfid, janela=None):
                     messagebox.showerror("Erro", "Não foi possível atualizar os dados. Tenta novamente mais tarde.")
 
     construir_aba_perfil(aba_perfil)
+
+    # ===================== ABA SEARCH =====================
+    def construir_aba_search(parent):
+        container = ttk.Frame(parent, style="Card.TFrame")
+        container.pack(fill="both", expand=True, padx=40, pady=40)
+
+        # Cabeçalho
+        header = ttk.Frame(container, style="Card.TFrame")
+        header.pack(fill="x", pady=(0, 30))
+        ttk.Label(header, text="PESQUISA DE CLIENTES", font=("Arial", 16, "bold"), foreground=VDF_RED).pack(anchor="w")
+        ttk.Label(header, text="Verifique se um número de telemóvel ou telefone fixo já existe no sistema.", font=("Arial", 10), foreground=VDF_MUTED).pack(anchor="w")
+
+        # Botão DAMI (Pedido do user - Masterizado)
+        def abrir_janela_dami():
+            dami_win = tk.Toplevel(janela)
+            dami_win.title("DAMI")
+            dami_win.geometry("650x550")
+            dami_win.grab_set() # Modal
+
+            nb_dami = ttk.Notebook(dami_win)
+            nb_dami.pack(fill="both", expand=True, padx=10, pady=10)
+
+            tab_meter = ttk.Frame(nb_dami)
+            tab_hist = ttk.Frame(nb_dami)
+
+            nb_dami.add(tab_meter, text="Meter em DAMI")
+            nb_dami.add(tab_hist, text="Histórico de DAMI")
+
+            # --- TAB METER ---
+            tk.Label(tab_meter, text="METER CLIENTE EM DAMI", font=("Arial", 14, "bold"), fg=VDF_RED).pack(pady=20)
+            tk.Label(tab_meter, text="Introduza o NIF do cliente:", font=("Arial", 10)).pack(pady=5)
+            
+            nif_ent = ttk.Entry(tab_meter, width=25)
+            nif_ent.pack(pady=10)
+            
+            def submeter():
+                nif_raw = nif_ent.get().strip()
+                nif_v = "".join(filter(str.isdigit, nif_raw))
+                
+                # Atualizar campo visualmente
+                nif_ent.delete(0, tk.END)
+                nif_ent.insert(0, nif_v)
+                
+                if not validar_nif_pt(nif_v):
+                    messagebox.showerror("NIF Inválido", "NIF Inválido, certifica-te que o NIF que escreveste está certo")
+                    return
+                
+                try:
+                    conn = ligar_db()
+                    cur = conn.cursor(dictionary=True)
+                    
+                    # 1. Verificar Limite de 3 DAMIs Ativos para este comercial
+                    cur.execute("SELECT COUNT(*) as total FROM DAMI WHERE (SFID = %s OR comercial_uuid = %s) AND data_dami IS NOT NULL AND data_dami > NOW() - INTERVAL 3 DAY", (ssfid, MEU_UUID))
+                    count_active = cur.fetchone()['total']
+                    if count_active >= 3:
+                        messagebox.showerror("Limite Atingido", "Não podes ter mais que 3 DAMIs ativos no sistema.")
+                        cur.close()
+                        conn.close()
+                        return
+
+                    # 2. Verificar se já está em DAMI ativo (por qualquer pessoa)
+                    cur.execute("SELECT * FROM DAMI WHERE nif = %s AND data_dami IS NOT NULL AND data_dami > NOW() - INTERVAL 3 DAY LIMIT 1", (nif_v,))
+                    exist = cur.fetchone()
+                    if exist:
+                        messagebox.showwarning("Aviso", "Este cliente já está em DAMI!")
+                        cur.close()
+                        conn.close()
+                        return
+                    
+                    # 3. Inserir
+                    cur.execute(
+                        "INSERT INTO DAMI (comercial_uuid, SFID, nome_comercial, nif, data_dami) VALUES (%s, %s, %s, %s, NOW())",
+                        (MEU_UUID, ssfid, nome, nif_v)
+                    )
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                    messagebox.showinfo("Sucesso", f"Cliente {nif_v} colocado em DAMI com sucesso!")
+                    nif_ent.delete(0, tk.END)
+                    carregar_historico() # Atualizar a outra aba
+                except Exception as _e:
+                    messagebox.showerror("Erro", f"Erro: {_e}")
+
+            ttk.Button(tab_meter, text="SUBMETER", style="Primary.TButton", command=submeter).pack(pady=20)
+
+            # --- TAB HISTÓRICO ---
+            def carregar_historico():
+                for w in tab_hist.winfo_children(): w.destroy()
+                
+                # Header
+                h_frame = tk.Frame(tab_hist, bg=VDF_BG)
+                h_frame.pack(fill="x", pady=(10, 5))
+                tk.Label(h_frame, text="NIF", font=("Arial", 10, "bold"), width=15, anchor="w", bg=VDF_BG).pack(side="left", padx=10)
+                tk.Label(h_frame, text="Data de Ativação", font=("Arial", 10, "bold"), width=25, anchor="w", bg=VDF_BG).pack(side="left", padx=10)
+                tk.Label(h_frame, text="Status/Ação", font=("Arial", 10, "bold"), width=20, anchor="w", bg=VDF_BG).pack(side="left", padx=10)
+
+                # Scrollable Area
+                container_h = ttk.Frame(tab_hist)
+                container_h.pack(fill="both", expand=True)
+                
+                canvas_h = tk.Canvas(container_h, bg=VDF_BG, highlightthickness=0)
+                scroll_h = ttk.Scrollbar(container_h, orient="vertical", command=canvas_h.yview)
+                scroll_frame = tk.Frame(canvas_h, bg=VDF_BG)
+                
+                canvas_h.configure(yscrollcommand=scroll_h.set)
+                canvas_h.pack(side="left", fill="both", expand=True)
+                scroll_h.pack(side="right", fill="y")
+                canvas_h.create_window((0,0), window=scroll_frame, anchor="nw")
+
+                def _on_frame_configure(e):
+                    canvas_h.configure(scrollregion=canvas_h.bbox("all"))
+                    canvas_h.itemconfig(canvas_window, width=canvas_h.winfo_width())
+
+                canvas_window = canvas_h.create_window((0,0), window=scroll_frame, anchor="nw")
+                scroll_frame.bind("<Configure>", _on_frame_configure)
+                canvas_h.bind("<Configure>", lambda e: canvas_h.itemconfig(canvas_window, width=e.width))
+
+                try:
+                    _conn = ligar_db()
+                    _cur = _conn.cursor(dictionary=True)
+                    # Buscar DAMIs do user (Ordenado por ativos primeiro)
+                    _cur.execute("""
+                        SELECT dami_id, nif, data_dami, 
+                        (data_dami IS NOT NULL AND data_dami > NOW() - INTERVAL 3 DAY) as is_active 
+                        FROM DAMI 
+                        WHERE SFID = %s OR comercial_uuid = %s 
+                        ORDER BY is_active DESC, data_dami DESC
+                    """, (ssfid, MEU_UUID))
+                    damis = _cur.fetchall()
+                    _cur.close()
+                    _conn.close()
+
+                    if not damis:
+                        tk.Label(scroll_frame, text="Não tens registos de DAMI.", bg=VDF_BG, font=("Arial", 10, "italic")).pack(pady=20)
+                    else:
+                        for d in damis:
+                            is_act = d['is_active']
+                            bg_color = "#D4EDDA" if is_act else "#E9ECEF" # Verde Suave ou Cinza Suave
+                            row_f = tk.Frame(scroll_frame, bg=bg_color, pady=8, bd=1, relief="flat")
+                            row_f.pack(fill="x", pady=2, padx=5)
+                            
+                            tk.Label(row_f, text=d['nif'], bg=bg_color, font=("Arial", 10, "bold"), width=15, anchor="w").pack(side="left", padx=10)
+                            
+                            dt_val = d['data_dami']
+                            dt_str = dt_val.strftime("%d/%m/%Y %H:%M") if dt_val else "CANCELADA/EXPIRADA"
+                            tk.Label(row_f, text=dt_str, bg=bg_color, width=25, anchor="w").pack(side="left", padx=10)
+
+                            if is_act:
+                                def cancel_dami(did=d['dami_id'], nif_c=d['nif']):
+                                    if messagebox.askyesno("Confirmar Cancelamento", f"Queres mesmo cancelar a DAMI do NIF {nif_c}?\nIsto libertará o cliente para outros comerciais."):
+                                        try:
+                                            _c = ligar_db()
+                                            _cu = _c.cursor()
+                                            _cu.execute("UPDATE DAMI SET data_dami = NULL WHERE dami_id = %s", (did,))
+                                            _c.commit()
+                                            _cu.close()
+                                            _c.close()
+                                            carregar_historico()
+                                        except Exception as _ex: messagebox.showerror("Erro", str(_ex))
+
+                                ttk.Button(row_f, text="Cancelar DAMI", command=cancel_dami).pack(side="right", padx=10)
+                            else:
+                                tk.Label(row_f, text="INATIVO", bg=bg_color, foreground="gray", width=15).pack(side="right", padx=10)
+
+                except Exception as _err:
+                    tk.Label(scroll_frame, text=f"Erro ao carregar histórico: {_err}", bg=VDF_BG).pack(pady=10)
+
+            # Carregar histórico ao abrir ou ao mudar de aba
+            def on_tab_change(event):
+                if nb_dami.index("current") == 1:
+                    carregar_historico()
+            nb_dami.bind("<<NotebookTabChanged>>", on_tab_change)
+            carregar_historico()
+
+        btn_dami = ttk.Button(header, text="DAMI", style="Primary.TButton", command=abrir_janela_dami)
+        btn_dami.pack(side="left", padx=(0, 20), pady=(10, 0))
+
+
+
+        # Função de pesquisa genérica
+        def pesquisar_bd(numero, tipo):
+            if len(numero) != 9 or not numero.isdigit():
+                return "invalido", ""
+
+            try:
+                conn = ligar_db()
+                cursor = conn.cursor(dictionary=True)
+                
+                if tipo == "movel":
+                    query = "SELECT nome_completo FROM RC WHERE tel_1 = %s OR tel_2 = %s OR tel_3 = %s OR tel_4 = %s LIMIT 1"
+                    cursor.execute(query, (numero, numero, numero, numero))
+                elif tipo == "fixo":
+                    query = "SELECT nome_completo FROM RC WHERE pf_fixo = %s LIMIT 1"
+                    cursor.execute(query, (numero,))
+                else: # nif
+                    query = "SELECT nome_completo FROM RC WHERE nif = %s LIMIT 1"
+                    cursor.execute(query, (numero,))
+                    
+                resultado = cursor.fetchone()
+                conn.close()
+                
+                if resultado:
+                    return "existe", resultado.get("nome_completo", "Desconhecido")
+                else:
+                    return "nao_existe", ""
+            except Exception as e:
+                print("Erro na pesquisa:", e)
+                return "erro", ""
+
+        # --- Secção Telemóvel ---
+        frame_movel = ttk.Frame(container, style="Card.TFrame")
+        frame_movel.pack(fill="x", pady=10)
+        
+        ttk.Label(frame_movel, text="Pesquisar Nº Telemóvel:", width=25, font=("Arial", 10, "bold"), background=VDF_CARD, foreground=VDF_TEXT).pack(side="left")
+        entry_movel = ttk.Entry(frame_movel, width=20, font=("Arial", 11))
+        entry_movel.pack(side="left", padx=10)
+        
+        lbl_status_movel = ttk.Label(frame_movel, text="", font=("Arial", 10, "bold"), background=VDF_CARD)
+        
+        def check_movel():
+            num = entry_movel.get().strip().replace(" ", "")
+            status, nome = pesquisar_bd(num, "movel")
+            
+            if status == "invalido":
+                lbl_status_movel.config(text="❌ Número inválido (deve ter 9 dígitos)", foreground="red")
+            elif status == "existe":
+                lbl_status_movel.config(text=f"✅ Cliente já existe no sistema ({nome})", foreground="green")
+            elif status == "nao_existe":
+                lbl_status_movel.config(text="ℹ️ Cliente não encontrado", foreground="#007BFF")
+            else:
+                lbl_status_movel.config(text="⚠️ Erro ao procurar na BD", foreground="orange")
+                
+        btn_movel = ttk.Button(frame_movel, text="Verificar", command=check_movel, style="Outline.TButton")
+        btn_movel.pack(side="left", padx=10)
+        lbl_status_movel.pack(side="left", padx=10)
+
+        # Separador
+        ttk.Separator(container, orient="horizontal").pack(fill="x", pady=20)
+
+        # --- Secção Telefone Fixo ---
+        frame_fixo = ttk.Frame(container, style="Card.TFrame")
+        frame_fixo.pack(fill="x", pady=10)
+        
+        ttk.Label(frame_fixo, text="Pesquisar Telefone Fixo:", width=25, font=("Arial", 10, "bold"), background=VDF_CARD, foreground=VDF_TEXT).pack(side="left")
+        entry_fixo = ttk.Entry(frame_fixo, width=20, font=("Arial", 11))
+        entry_fixo.pack(side="left", padx=10)
+        
+        lbl_status_fixo = ttk.Label(frame_fixo, text="", font=("Arial", 10, "bold"), background=VDF_CARD)
+        
+        def check_fixo():
+            num = entry_fixo.get().strip().replace(" ", "")
+            status, nome = pesquisar_bd(num, "fixo")
+            
+            if status == "invalido":
+                lbl_status_fixo.config(text="❌ Número inválido (deve ter 9 dígitos)", foreground="red")
+            elif status == "existe":
+                lbl_status_fixo.config(text=f"✅ Cliente já existe no sistema ({nome})", foreground="green")
+            elif status == "nao_existe":
+                lbl_status_fixo.config(text="ℹ️ Cliente não encontrado", foreground="#007BFF")
+            else:
+                lbl_status_fixo.config(text="⚠️ Erro ao procurar na BD", foreground="orange")
+                
+        btn_fixo = ttk.Button(frame_fixo, text="Verificar", command=check_fixo, style="Outline.TButton")
+        btn_fixo.pack(side="left", padx=10)
+        lbl_status_fixo.pack(side="left", padx=10)
+
+        # Separador
+        ttk.Separator(container, orient="horizontal").pack(fill="x", pady=20)
+
+        # --- Secção NIF ---
+        frame_nif = ttk.Frame(container, style="Card.TFrame")
+        frame_nif.pack(fill="x", pady=10)
+        
+        ttk.Label(frame_nif, text="Pesquisar NIF:", width=25, font=("Arial", 10, "bold"), background=VDF_CARD, foreground=VDF_TEXT).pack(side="left")
+        entry_nif = ttk.Entry(frame_nif, width=20, font=("Arial", 11))
+        entry_nif.pack(side="left", padx=10)
+        
+        lbl_status_nif = ttk.Label(frame_nif, text="", font=("Arial", 10, "bold"), background=VDF_CARD)
+        
+        def check_nif():
+            num = entry_nif.get().strip().replace(" ", "")
+            status, nome = pesquisar_bd(num, "nif")
+            
+            if status == "invalido":
+                lbl_status_nif.config(text="❌ NIF inválido (deve ter 9 dígitos)", foreground="red")
+            elif status == "existe":
+                lbl_status_nif.config(text=f"✅ Cliente já existe no sistema ({nome})", foreground="green")
+            elif status == "nao_existe":
+                lbl_status_nif.config(text="ℹ️ Cliente não encontrado", foreground="#007BFF")
+            else:
+                lbl_status_nif.config(text="⚠️ Erro ao procurar na BD", foreground="orange")
+                
+        btn_nif = ttk.Button(frame_nif, text="Verificar", command=check_nif, style="Outline.TButton")
+        btn_nif.pack(side="left", padx=10)
+        lbl_status_nif.pack(side="left", padx=10)
+
+    construir_aba_search(aba_search)
     
     notebook.add(aba_eurus, text="🤖 EURUS")
 
@@ -4587,7 +5196,7 @@ def abrir_interface(nome, ssfid, janela=None):
 
     tk.Label(
         title_box,
-        text="CONTRATO VODAFONE - PREENCHIMENTO PERFEITO (V 1.2.1)",
+        text="CONTRATO VODAFONE (V 1.2.1)",
         bg=VDF_BG,
         fg=VDF_TEXT,
         font=("Arial", 14, "bold")
@@ -4801,7 +5410,63 @@ def abrir_interface(nome, ssfid, janela=None):
     global entry_nome, entry_nif
     ttk.Label(frame, text="DADOS DO CLIENTE", style="Section.TLabel").pack(anchor="w", pady=(0, 8))
     entry_nome = linha("NOME COMPLETO DO CLIENTE")
-    entry_nif = linha("NIF DO CLIENTE")
+    # NIF DO CLIENTE com Lupa (DAMI Check)
+    row_nif_c = tk.Frame(frame, bg=VDF_CARD)
+    row_nif_c.pack(fill="x", pady=6)
+    ttk.Label(row_nif_c, text="NIF DO CLIENTE *", width=55, anchor="w").pack(side="left", padx=(2, 10))
+    entry_nif = ttk.Entry(row_nif_c, width=40, font=("Arial", 11))
+    entry_nif.pack(side="left", padx=10)
+    
+    lbl_dami_status = ttk.Label(row_nif_c, text="", font=("Arial", 10, "bold"))
+    lbl_dami_status.pack(side="left", padx=5)
+
+    global nif_verificado, nif_verificado_valor
+    nif_verificado = False
+    nif_verificado_valor = ""
+
+    def verificar_dami():
+        global nif_verificado, nif_verificado_valor
+        nif_raw = entry_nif.get().strip()
+        # Limpar NIF: manter apenas dígitos (remove pontos, espaços, etc)
+        nif_v = "".join(filter(str.isdigit, nif_raw))
+        
+        # Atualizar campo com valor limpo
+        entry_nif.delete(0, tk.END)
+        entry_nif.insert(0, nif_v)
+
+        if not validar_nif_pt(nif_v):
+            messagebox.showerror("NIF Inválido", "NIF Matemáticamente Inválido.")
+            nif_verificado = False
+            return
+        
+        try:
+            _conn = ligar_db()
+            _cur = _conn.cursor(dictionary=True)
+            # Verificar se está em DAMI ativo (3 dias) por OUTRO comercial
+            _cur.execute("SELECT * FROM DAMI WHERE nif = %s AND data_dami IS NOT NULL AND data_dami > NOW() - INTERVAL 3 DAY AND (SFID != %s OR comercial_uuid != %s) LIMIT 1", (nif_v, ssfid, MEU_UUID))
+            dami_rec = _cur.fetchone()
+            _cur.close()
+            _conn.close()
+            
+            if dami_rec:
+                nif_verificado = False
+                lbl_dami_status.config(text="(Cliente em DAMI) NIF não elegível para contrato", foreground="red")
+            else:
+                nif_verificado = True
+                nif_verificado_valor = nif_v
+                lbl_dami_status.config(text="✅ NIF Elegível", foreground="green")
+        except Exception as _e:
+            print("Erro ao verificar DAMI:", _e)
+
+    btn_lupa = ttk.Button(row_nif_c, text="🔍", width=3, command=verificar_dami)
+    btn_lupa.pack(side="left", padx=5)
+
+    def _reset_nif_v(e):
+        global nif_verificado
+        nif_verificado = False
+        lbl_dami_status.config(text="")
+    entry_nif.bind("<KeyRelease>", _reset_nif_v)
+
 
     # Nota de validação (vermelho) — para evitar confusões na venda
     nota_nif = tk.Frame(frame, bg=VDF_CARD)
@@ -4960,6 +5625,74 @@ def abrir_interface(nome, ssfid, janela=None):
     combo_fatura.pack(side="left", padx=20)
 
     entry_iban = linha("IBAN (facultativo)", False)
+
+    # --- VALIDAÇÃO DE IBAN ---
+    global iban_validado
+    iban_validado = False
+    
+    lbl_iban_feedback = ttk.Label(entry_iban.master, text="", font=("Arial", 9))
+    
+    def validar_iban():
+        global iban_validado
+        iban_original = entry_iban.get().replace(" ", "").upper()
+        
+        if not iban_original:
+            iban_validado = True
+            lbl_iban_feedback.config(text="✅ (Vazio)", foreground="green")
+            return
+            
+        # Se tiver 21 caracteres e forem todos números, assumimos que falta o PT50
+        iban_para_calculo = iban_original
+        if len(iban_original) == 21 and iban_original.isdigit():
+            iban_para_calculo = "PT50" + iban_original
+            
+        if len(iban_para_calculo) < 15 or len(iban_para_calculo) > 34:
+            iban_validado = False
+            lbl_iban_feedback.config(text="❌ Tamanho Inválido", foreground="red")
+            return
+            
+        # Mover os 4 primeiros caracteres para o fim
+        iban_calc = iban_para_calculo[4:] + iban_para_calculo[:4]
+        
+        # Converter letras para números (A=10 até Z=35)
+        iban_num = ""
+        for char in iban_calc:
+            if char.isalpha():
+                iban_num += str(ord(char) - ord('A') + 10)
+            elif char.isdigit():
+                iban_num += char
+            else:
+                iban_validado = False
+                lbl_iban_feedback.config(text="❌ Caracteres Inválidos", foreground="red")
+                return
+                
+        # Fazer o cálculo MOD 97
+        try:
+            is_valid = int(iban_num) % 97 == 1
+        except ValueError:
+            is_valid = False
+            
+        if is_valid:
+            iban_validado = True
+            formatado = " ".join([iban_original[i:i+4] for i in range(0, len(iban_original), 4)])
+            entry_iban.delete(0, tk.END)
+            entry_iban.insert(0, formatado)
+            lbl_iban_feedback.config(text="✅ Válido", foreground="green")
+        else:
+            iban_validado = False
+            lbl_iban_feedback.config(text="❌ Inválido", foreground="red")
+
+    def reset_iban_validation(event):
+        global iban_validado
+        iban_validado = False
+        lbl_iban_feedback.config(text="")
+
+    entry_iban.bind("<KeyRelease>", reset_iban_validation)
+
+    btn_lupa_iban = ttk.Button(entry_iban.master, text="🔍", style="Outline.TButton", command=validar_iban, width=3)
+    btn_lupa_iban.pack(side="left", padx=5)
+    lbl_iban_feedback.pack(side="left")
+    # -------------------------
 
     # --- DÉBITO DIRETO (NOVO) ---
     global entry_ntcb, entry_banco, var_pagamento_recorrente
@@ -6028,6 +6761,11 @@ def abrir_interface(nome, ssfid, janela=None):
                         entry_contacto.insert(0, valor("tel_contacto"))
                         entry_iban.delete(0, tk.END)
                         entry_iban.insert(0, valor("IBAN"))
+                        iban_validado = True
+                        try:
+                            lbl_iban_feedback.config(text="✅ Carregado", foreground="green")
+                        except Exception:
+                            pass
                         entry_ntcb.delete(0, tk.END)
                         entry_ntcb.insert(0, valor("NTCB"))
                         entry_banco.delete(0, tk.END)
@@ -6121,6 +6859,11 @@ def abrir_interface(nome, ssfid, janela=None):
 
                         entry_iban.delete(0, tk.END)
                         entry_iban.insert(0, valor("IBAN"))
+                        iban_validado = True
+                        try:
+                            lbl_iban_feedback.config(text="✅ Carregado", foreground="green")
+                        except Exception:
+                            pass
                         var_fatura_eletronica.set(bool(c.get("FE", 0)))
                         var_ze_sem_ze.set(bool(c.get("ze_sem_ze", 0)))
                         combo_fatura.set(valor("tipo_fatura"))
