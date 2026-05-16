@@ -3453,6 +3453,57 @@ def gerar():
                         except: pass
                         return
 
+            # --- VALIDAÇÃO DE CVP (Regras Vodafone) ---
+            if row.get("cvp") and row.get("op"):
+                cvp_val = row["cvp"].get().strip().replace(" ", "")
+                op_val = row["op"].get().strip().upper()
+                
+                # Se for Vodafone, ignoramos a validação de CVP pois deve estar desabilitado
+                if "VODAFONE" not in op_val:
+                    if cvp_val:
+                        # 1. Tamanho (12 caracteres)
+                        if len(cvp_val) != 12:
+                            messagebox.showwarning("Erro CVP", f"Linha {i+1}:\nO CVP deve ter exatamente 12 caracteres. O tamanho atual ({len(cvp_val)}) não corresponde.")
+                            try: row["cvp"].focus_set()
+                            except: pass
+                            return
+                        
+                        # 2. Prefixo por Operadora
+                        prefixo = cvp_val[:2]
+                        map_cvp = {
+                            "10": "NOS",
+                            "20": ["MEO", "UZO"],
+                            "80": "NOWO",
+                            "25": "DIGI",
+                            "32": "LYCAMOBILE"
+                        }
+                        
+                        found_op = False
+                        for p, names in map_cvp.items():
+                            if prefixo == p:
+                                if isinstance(names, list):
+                                    if any(n in op_val for n in names): found_op = True
+                                else:
+                                    if names in op_val: found_op = True
+                        
+                        if not found_op:
+                            messagebox.showwarning("Erro CVP", f"Linha {i+1}:\nCVP nao corresponde á operadora ({op_val}).")
+                            try: row["cvp"].focus_set()
+                            except: pass
+                            return
+                            
+                        # 3. Titular Divergente (NIF check)
+                        nif_cliente = nif_final # já limpo no topo da função gerar
+                        if len(nif_cliente) >= 4:
+                            last_4_nif = nif_cliente[-4:]
+                            # xxx xxx x|xx xx|x -> posições 7, 8, 9, 10
+                            cvp_nif_part = cvp_val[7:11]
+                            if cvp_nif_part != last_4_nif:
+                                messagebox.showwarning("Erro CVP", f"Linha {i+1}:\nTitular Divergente (CVP não corresponde ao NIF do cliente).")
+                                try: row["cvp"].focus_set()
+                                except: pass
+                                return
+
     # -- Portabilidade Fixa --
     if "entry_pf_fixo" in globals():
         pf_fixo_v = entry_pf_fixo.get().strip()
@@ -5964,6 +6015,16 @@ def abrir_interface(nome, ssfid, janela=None):
         entry_cvp = ttk.Entry(linha, width=14)
         entry_cvp.pack(side="left", padx=(8, 12))
 
+        # Lógica para desativar CVP se for Vodafone
+        def _check_vdf_cvp(event=None):
+            if combo_op.get().upper() == "VODAFONE":
+                entry_cvp.delete(0, tk.END)
+                entry_cvp.config(state="disabled")
+            else:
+                entry_cvp.config(state="normal")
+        
+        combo_op.bind("<<ComboboxSelected>>", _check_vdf_cvp)
+
         # 7) Nº Cartão SIM (KMAT)
         ttk.Label(linha, text="Nº Cartão SIM", background=VDF_CARD, foreground=VDF_TEXT).pack(side="left")
         entry_kmat = ttk.Entry(linha, width=14)
@@ -6393,7 +6454,9 @@ def abrir_interface(nome, ssfid, janela=None):
         values=[
             "NOS Comunicações, S.A.: Apartado 52111, EC Campo Grande, 1721-501 Lisboa",
             "MEO - Serviço Comunicações e Multimédia, S.A., Apartado 1423 EC Pedro Hispano (Porto) 4106-005 Porto",
-            "NOWO Communications, S.A.: Serviço de Cliente, Apartado 200, Loja CTT Palmela, 2951-901 Palmela"
+            "NOWO Communications, S.A.: Serviço de Cliente, Apartado 200, Loja CTT Palmela, 2951-901 Palmela",
+            "DIGI Portugal, Lda. Sede: Avenida José Malhoa, 11 - 3º, 1070-157 Lisboa",
+            "Vodafone Portugal, Comunicações Pessoais, S.A. Sede: Av. D. João II 36, E205 P. Nações, 1998-017 Lisboa"
         ]
     )
     combo_operadora_res.pack(anchor="w", pady=6)
@@ -6957,6 +7020,36 @@ def abrir_interface(nome, ssfid, janela=None):
     
     threading.Thread(target=_auto_load_rosto, daemon=True).start()
 
+    # === SISTEMA DE REFRESH GLOBAL (UI + BACKGROUND) ===
+    def refresh_ui_completo():
+        """Recarrega os dados da UI de forma segura."""
+        try:
+            # Recarregar lista de contratos
+            carregar_contratos()
+        except Exception:
+            pass
+
+    # Guardar callback globalmente para o sistema de restauro (Single Instance)
+    globals()['REFRESH_UI_CALLBACK'] = refresh_ui_completo
+
+    # Thread de Background Loop: Corre a cada 5 minutos
+    def _background_sync_loop():
+        import time
+        while True:
+            try:
+                h = globals().get('MAIN_WINDOW_HANDLE')
+                if h:
+                    # Se a app estiver em segundo plano (escondida), faz sync e refresh silencioso
+                    if h.state() == 'withdrawn':
+                        _trigger_sync_mac_rc_background(limit=8)
+                        # Atualizar a UI para quando o utilizador voltar
+                        h.after(0, refresh_ui_completo)
+            except Exception:
+                pass
+            time.sleep(300) # 5 em 5 minutos
+
+    threading.Thread(target=_background_sync_loop, daemon=True).start()
+
     carregar_contratos()
     janela.mainloop()
 
@@ -7480,7 +7573,19 @@ def check_single_instance():
                         handle = globals().get('MAIN_WINDOW_HANDLE')
                         if handle:
                             # Pedir à janela para aparecer (deiconify) e vir para a frente
-                            handle.after(0, lambda: [handle.deiconify(), handle.lift(), handle.focus_force()])
+                            def _do_restore():
+                                try:
+                                    handle.deiconify()
+                                    handle.lift()
+                                    handle.focus_force()
+                                    # Trigger refresh se existir
+                                    refresh_cb = globals().get('REFRESH_UI_CALLBACK')
+                                    if refresh_cb:
+                                        refresh_cb()
+                                except Exception:
+                                    pass
+                            
+                            handle.after(0, _do_restore)
                         else:
                             # Se a janela principal ainda não existir (está no login), tenta o login
                             login_win = globals().get('LOGIN_WINDOW_HANDLE')
