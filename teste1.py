@@ -1547,11 +1547,6 @@ def upsert_rc(dados: dict, nome_vendedor: str, sfid: str):
         conn.commit()
         new_id = getattr(cur, "lastrowid", None)
 
-        # atualiza o global (se existir), para permitir "editar imediatamente" após gravar
-        try:
-            globals()["CURRENT_RC_ID"] = int(new_id) if new_id is not None else None
-        except Exception:
-            pass
 
         return new_id
 
@@ -3319,23 +3314,58 @@ def preencher_pdf(dados):
     if doc_rosto: doc_rosto.close()
     if doc_rc: doc_rc.close()
     doc.close()
+    return output_pdf
 
-    def abrir_documento(filepath):
-        """Abre um ficheiro de forma cross-platform (Windows, Mac, Linux)."""
-        import platform
-        import subprocess
-        try:
-            if platform.system() == 'Darwin':       # macOS
-                subprocess.call(('open', filepath))
-            elif platform.system() == 'Windows':    # Windows
-                os.startfile(filepath)
-            else:                                   # Linux variants
-                subprocess.call(('xdg-open', filepath))
-        except Exception as e:
-            print(f"Erro ao abrir ficheiro: {e}")
+def abrir_documento(filepath):
+    """Abre um ficheiro de forma cross-platform (Windows, Mac, Linux)."""
+    import platform
+    import subprocess
+    import os
+    try:
+        if platform.system() == 'Darwin':       # macOS
+            subprocess.call(('open', filepath))
+        elif platform.system() == 'Windows':    # Windows
+            os.startfile(filepath)
+        else:                                   # Linux variants
+            subprocess.call(('xdg-open', filepath))
+    except Exception as e:
+        print(f"Erro ao abrir ficheiro: {e}")
 
-    messagebox.showinfo("PRONTO!", f"Documento final (Rosto + RC + Contrato) gerado com sucesso!\n{output_pdf}")
-    abrir_documento(output_pdf)
+def mostrar_loading_vdf(parent, msg="A preparar contrato..."):
+    """Cria uma janela de carregamento estável com estilo Vodafone."""
+    loading = tk.Toplevel(parent)
+    loading.title("Vodafone Tool")
+    loading.configure(bg="#E60000") # Vermelho Vodafone
+    
+    # Remover bordas e forçar no topo (mas mantendo comportamento de janela)
+    loading.overrideredirect(True)
+    
+    # Tamanho e Centralização
+    w, h = 400, 180
+    ws = loading.winfo_screenwidth()
+    hs = loading.winfo_screenheight()
+    x = (ws/2) - (w/2)
+    y = (hs/2) - (h/2)
+    loading.geometry(f"{int(w)}x{int(h)}+{int(x)}+{int(y)}")
+    
+    # Borda branca fina para parecer premium
+    main_f = tk.Frame(loading, bg="#E60000", highlightthickness=2, highlightbackground="white")
+    main_f.pack(fill="both", expand=True)
+
+    tk.Label(main_f, text="VODAFONE", font=("Arial", 22, "bold"), fg="white", bg="#E60000").pack(pady=(25, 5))
+    tk.Label(main_f, text=msg, font=("Arial", 10), fg="white", bg="#E60000").pack(pady=5)
+    
+    # Progress Bar (Estilo Vodafone)
+    style = ttk.Style()
+    style.configure("vdf.Horizontal.TProgressbar", background="white", troughcolor="#B80000", borderwidth=0, thickness=5)
+    
+    pb = ttk.Progressbar(main_f, mode='indeterminate', length=280, style="vdf.Horizontal.TProgressbar")
+    pb.pack(pady=15)
+    pb.start(15)
+    
+    loading.update()
+    return loading
+
 # ======================= FUNÇÃO GERAR CONTRATO =======================
 
 def gerar():
@@ -3769,149 +3799,98 @@ def gerar():
     except Exception:
         dados["titularidades"] = []
 
-
-    # Validação básica (mantive)
-    if not dados["nome_completo"] or not dados["nif"]:
+    # === Validação básica e Perguntas Obrigatórias ===
+    if not (dados.get("nome_completo") or "").strip() or not (dados.get("nif") or "").strip():
         messagebox.showwarning("Atenção", "Nome e NIF obrigatórios!")
         return
 
-    # -----------------------------
-    # Validação: Perguntas Obrigatórias (Oferta/Plataforma/Extra/Origem)
-    # -----------------------------
-    # Nota: Nº de boxes já tem default "0" e o valor das boxes é opcional.
-
-    # Comercial (obrigatório - vai para PDF e BD, não mexe no Excel)
     if not (dados.get("sfid_comercial") or "").strip():
         messagebox.showwarning("Validação", "Preenche o SFID Comercial (Perguntas Obrigatórias).")
-        try:
-            entry_sfid_comercial.focus_set()
-        except Exception:
-            pass
         return
-
     if not (dados.get("nome_comercial") or "").strip():
         messagebox.showwarning("Validação", "Preenche o Nome Comercial (Perguntas Obrigatórias).")
-        try:
-            entry_nome_comercial.focus_set()
-        except Exception:
-            pass
         return
-
     if not (dados.get("oferta_novo_cliente") or "").strip():
-        messagebox.showwarning("Validação", "Preenche a oferta do novo cliente (Perguntas Obrigatórias).")
-        try:
-            entry_oferta_novo_cliente.focus_set()
-        except Exception:
-            pass
+        messagebox.showwarning("Validação", "Preenche a oferta do novo cliente.")
         return
-
     if not (dados.get("plataforma_meses") or "").strip():
-        messagebox.showwarning("Validação", "Preenche a plataforma (se tiver) e quantos meses (Perguntas Obrigatórias).")
-        try:
-            entry_plataforma_meses.focus_set()
-        except Exception:
-            pass
-        return
-
-    if not (dados.get("oferta_extra") or "").strip():
-        messagebox.showwarning("Validação", "Preenche se ofereces-te alguma oferta extra ao cliente (Perguntas Obrigatórias).")
-        try:
-            entry_oferta_extra.focus_set()
-        except Exception:
-            pass
+        messagebox.showwarning("Validação", "Preenche a plataforma e meses.")
         return
 
     origem = (dados.get("origem_venda") or "").strip()
     if not origem:
-        messagebox.showwarning("Validação", "Seleciona a origem da venda (Perguntas Obrigatórias).")
-        try:
-            combo_origem_venda.focus_set()
-        except Exception:
-            pass
+        messagebox.showwarning("Validação", "Seleciona a origem da venda.")
+        return
+    if origem.upper().startswith("OUTRA") and not (dados.get("origem_venda_outra") or "").strip():
+        messagebox.showwarning("Validação", "Escreve qual é a origem 'OUTRA'.")
         return
 
-    # Se a origem for "OUTRA", obriga a descrição
-    if origem.upper().startswith("OUTRA"):
-        outra_txt = (dados.get("origem_venda_outra") or "").strip()
-        if not outra_txt:
-            messagebox.showwarning("Validação", "Selecionaste 'OUTRA' na origem da venda. Escreve qual é a origem.")
-            try:
-                entry_origem_outra.focus_set()
-            except Exception:
-                pass
-            return
-
-
-    nome_vendedor, sfid = ler_dados()
-
-    try:
-        inserir_vendedor(nome_vendedor, sfid)
-        # Guarda tudo na RC (com colunas auto-criadas se faltarem)
-        dados["rc_id"] = globals().get("CURRENT_RC_ID")
+    # === LÓGICA DE EXECUÇÃO EM BACKGROUND ===
+    def processar_venda():
+        # Referência segura para a janela principal
+        root_win = globals().get('MAIN_WINDOW_HANDLE')
+        
         try:
-            dados["mac"] = int(globals().get("CURRENT_VENDEDOR_MAC", 0) or 0)
-        except Exception:
-            dados["mac"] = 0
-        rc_id_saved = upsert_rc(dados, nome_vendedor, sfid)
-        try:
+            nome_vendedor, sfid = ler_dados()
+            inserir_vendedor(nome_vendedor, sfid)
+            
+            # Recuperar ID atual para saber se é UPDATE ou INSERT
+            dados["rc_id"] = globals().get("CURRENT_RC_ID")
+            
+            # Upsert (BD)
+            rc_id_saved = upsert_rc(dados, nome_vendedor, sfid)
             dados["rc_id"] = rc_id_saved
-        except Exception:
-            pass
 
-        # Guardar flag do vendedor (Mac) no registo RC
-        try:
-            dados["mac"] = int(globals().get("CURRENT_VENDEDOR_MAC", 0) or 0)
-        except Exception:
-            dados["mac"] = 0
-
-        # Exportar perguntas obrigatórias para Google Sheets (não bloqueia o fluxo)
-        # Regras:
-        #   - Só Windows (runtime) e vendedores com mac=0 exportam diretamente
-        #   - RCs criados por utilizadores Mac (mac=1) ficam pendentes (sheets_status=0)
-        #   - Em Windows, a app também faz "bridge" e tenta enviar RCs pendentes de Mac de 15 em 15 minutos
-        try:
-            if _can_export_sheets():
-                ok_gsh, msg_gsh = exportar_perguntas_para_google_sheets(dados)
-                if ok_gsh:
-                    try:
+            # Google Sheets
+            try:
+                if _can_export_sheets():
+                    ok_gsh, msg_gsh = exportar_perguntas_para_google_sheets(dados)
+                    if ok_gsh:
                         ts_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         _rc_set_sheets_status(int(rc_id_saved), 1, ts_now, None)
-                    except Exception:
-                        pass
-                else:
-                    try:
+                    else:
                         _rc_set_sheets_status(int(rc_id_saved), 0, None, str(msg_gsh)[:4000])
-                    except Exception:
-                        pass
-                    # Aviso leve: não impede gerar contrato
-                    try:
-                        messagebox.showwarning("Google Sheets", msg_gsh)
-                    except Exception:
-                        pass
+                    _trigger_sync_mac_rc_background(limit=4)
+                else:
+                    _rc_set_sheets_status(int(rc_id_saved), 0, None, "Pendente: bridge Windows.")
+            except: pass
 
-                # Trigger extra: aproveita e tenta enviar alguns RCs pendentes de Mac em background
-                _trigger_sync_mac_rc_background(limit=4)
+            # PDF
+            pdf_path = preencher_pdf(dados)
 
+            # Voltar à main thread para finalizar
+            if root_win:
+                root_win.after(0, lambda: finalizar_sucesso(pdf_path))
             else:
-                # Bypass (macOS ou vendedor marcado como mac=1). Deixa pendente para o bridge Windows.
-                try:
-                    _rc_set_sheets_status(int(rc_id_saved), 0, None, "Pendente: export para Sheets será feito por um Windows (bridge).")
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        except Exception:
-            pass
+                finalizar_sucesso(pdf_path)
 
+        except Exception as e:
+            if root_win:
+                root_win.after(0, lambda: finalizar_erro(str(e)))
+            else:
+                finalizar_erro(str(e))
 
-    except Exception as e:
-        messagebox.showerror("Erro BD", f"Erro ao gravar na base de dados:\n{e}")
-        return
+    def finalizar_sucesso(pdf_path):
+        try: loading_win.destroy()
+        except: pass
+        
+        # RESET CRÍTICO: Limpa o ID global para que a PRÓXIMA geração crie um novo registo
+        globals()["CURRENT_RC_ID"] = None
+        
+        messagebox.showinfo("Sucesso", "Contrato e Registo gerados com sucesso! 🚀")
+        abrir_documento(pdf_path)
 
-    preencher_pdf(dados)
-    messagebox.showinfo("Sucesso", "Contrato atualizado/gerado com sucesso!")
+    def finalizar_erro(err_msg):
+        try: loading_win.destroy()
+        except: pass
+        messagebox.showerror("Erro na Geração", f"Ocorreu um erro inesperado:\n{err_msg}")
 
-
+    # Referência para a janela pai (main window)
+    main_win = globals().get('MAIN_WINDOW_HANDLE')
+    
+    # Mostrar Loading (Vodafone Red) e Iniciar Thread
+    loading_win = mostrar_loading_vdf(main_win, "A preparar o contrato para o teu cliente... 🚀")
+    threading.Thread(target=processar_venda, daemon=True).start()
 # ======================= FUNÇÃO PRINCIPAL (INTERFACE) =======================
 def abrir_interface(nome, ssfid, janela=None):
     """Abre a interface principal."""
@@ -4343,20 +4322,20 @@ def abrir_interface(nome, ssfid, janela=None):
                 cursor = conn.cursor(dictionary=True)
                 
                 if tipo == "movel":
-                    query = "SELECT nome_completo FROM RC WHERE tel_1 = %s OR tel_2 = %s OR tel_3 = %s OR tel_4 = %s LIMIT 1"
+                    query = "SELECT nome FROM RC WHERE tel_1 = %s OR tel_2 = %s OR tel_3 = %s OR tel_4 = %s LIMIT 1"
                     cursor.execute(query, (numero, numero, numero, numero))
                 elif tipo == "fixo":
-                    query = "SELECT nome_completo FROM RC WHERE pf_fixo = %s LIMIT 1"
+                    query = "SELECT nome FROM RC WHERE pf_fixo = %s LIMIT 1"
                     cursor.execute(query, (numero,))
                 else: # nif
-                    query = "SELECT nome_completo FROM RC WHERE nif = %s LIMIT 1"
+                    query = "SELECT nome FROM RC WHERE nif = %s LIMIT 1"
                     cursor.execute(query, (numero,))
                     
                 resultado = cursor.fetchone()
                 conn.close()
                 
                 if resultado:
-                    return "existe", resultado.get("nome_completo", "Desconhecido")
+                    return "existe", resultado.get("nome", "Desconhecido")
                 else:
                     return "nao_existe", ""
             except Exception as e:
@@ -4380,7 +4359,7 @@ def abrir_interface(nome, ssfid, janela=None):
             if status == "invalido":
                 lbl_status_movel.config(text="❌ Número inválido (deve ter 9 dígitos)", foreground="red")
             elif status == "existe":
-                lbl_status_movel.config(text=f"✅ Cliente já existe no sistema ({nome})", foreground="green")
+                lbl_status_movel.config(text=f"✅ Cliente registado por ({nome})", foreground="green")
             elif status == "nao_existe":
                 lbl_status_movel.config(text="ℹ️ Cliente não encontrado", foreground="#007BFF")
             else:
@@ -4410,7 +4389,7 @@ def abrir_interface(nome, ssfid, janela=None):
             if status == "invalido":
                 lbl_status_fixo.config(text="❌ Número inválido (deve ter 9 dígitos)", foreground="red")
             elif status == "existe":
-                lbl_status_fixo.config(text=f"✅ Cliente já existe no sistema ({nome})", foreground="green")
+                lbl_status_fixo.config(text=f"✅ Cliente registado por ({nome})", foreground="green")
             elif status == "nao_existe":
                 lbl_status_fixo.config(text="ℹ️ Cliente não encontrado", foreground="#007BFF")
             else:
@@ -4440,7 +4419,7 @@ def abrir_interface(nome, ssfid, janela=None):
             if status == "invalido":
                 lbl_status_nif.config(text="❌ NIF inválido (deve ter 9 dígitos)", foreground="red")
             elif status == "existe":
-                lbl_status_nif.config(text=f"✅ Cliente já existe no sistema ({nome})", foreground="green")
+                lbl_status_nif.config(text=f"✅ Cliente registado por ({nome})", foreground="green")
             elif status == "nao_existe":
                 lbl_status_nif.config(text="ℹ️ Cliente não encontrado", foreground="#007BFF")
             else:
