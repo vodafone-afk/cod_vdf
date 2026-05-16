@@ -3493,13 +3493,20 @@ def gerar():
                             return
                             
                         # 3. Titular Divergente (NIF check)
-                        nif_cliente = nif_final # já limpo no topo da função gerar
-                        if len(nif_cliente) >= 4:
-                            last_4_nif = nif_cliente[-4:]
+                        # Procurar o NIF desta linha específica
+                        this_line_nif = ""
+                        if row.get("nif"):
+                            this_line_nif = "".join(filter(str.isdigit, row["nif"].get().strip()))
+                        
+                        # Fallback para o NIF do cliente (topo) se a linha estiver vazia
+                        nif_para_validar = this_line_nif if this_line_nif else nif_final
+                        
+                        if len(nif_para_validar) >= 4:
+                            last_4_nif = nif_para_validar[-4:]
                             # xxx xxx x|xx xx|x -> posições 7, 8, 9, 10
                             cvp_nif_part = cvp_val[7:11]
                             if cvp_nif_part != last_4_nif:
-                                messagebox.showwarning("Erro CVP", f"Linha {i+1}:\nTitular Divergente (CVP não corresponde ao NIF do cliente).")
+                                messagebox.showwarning("Erro CVP", f"Linha {i+1}:\nTitular Divergente (CVP não corresponde ao NIF {nif_para_validar}).")
                                 try: row["cvp"].focus_set()
                                 except: pass
                                 return
