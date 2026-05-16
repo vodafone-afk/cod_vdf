@@ -795,12 +795,20 @@ def upload_to_github(local_path: str, remote_path: str, attempt=1):
     """Faz o upload de um ficheiro local para o repositório GitHub usando a API."""
     import base64
     import json
+    import ssl
+    import urllib.request
+    import urllib.error
     
     if not os.path.exists(local_path):
         print(f"❌ Upload falhou: Ficheiro local {local_path} não existe.")
         return False
         
     try:
+        # Criar contexto SSL que ignora erros de certificado se necessário (comum em alguns Windows/Redes)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
         print(f"☁️ A iniciar upload para GitHub: {remote_path} (Tentativa {attempt})...")
         with open(local_path, "rb") as f:
             content = base64.b64encode(f.read()).decode("utf-8")
@@ -818,15 +826,15 @@ def upload_to_github(local_path: str, remote_path: str, attempt=1):
             req_get.add_header("Authorization", f"token {GITHUB_TOKEN}")
             req_get.add_header("Accept", "application/vnd.github.v3+json")
             req_get.add_header("Cache-Control", "no-cache")
-            with urllib.request.urlopen(req_get, timeout=10) as resp:
+            with urllib.request.urlopen(req_get, timeout=10, context=ctx) as resp:
                 info = json.loads(resp.read().decode())
                 sha = info.get("sha")
-        except Exception as e:
-            # Se der 404, o ficheiro não existe, o que é normal para o primeiro upload
+        except Exception:
+            # Se der 404, o ficheiro não existe, o que é normal
             pass
             
         data_dict = {
-            "message": f"Upload RC: {os.path.basename(remote_path)}",
+            "message": f"Upload: {os.path.basename(remote_path)}",
             "content": content,
             "branch": "main"
         }
@@ -840,10 +848,9 @@ def upload_to_github(local_path: str, remote_path: str, attempt=1):
         req.add_header("Content-Type", "application/json")
         req.add_header("Accept", "application/vnd.github.v3+json")
         
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=20, context=ctx) as resp:
             if resp.status in [200, 201]:
                 print(f"✅ Upload concluído com sucesso para o GitHub: {remote_path}")
-                # Mostrar sucesso silencioso no log
                 return True
             else:
                 msg = f"Erro no GitHub: Status {resp.status}"
@@ -851,11 +858,13 @@ def upload_to_github(local_path: str, remote_path: str, attempt=1):
                 _mostrar_erro_upload(msg)
                 return False
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode()
+        try: error_body = e.read().decode()
+        except: error_body = "Sem corpo de erro"
+        
         if e.code == 409 and attempt <= 3:
-            print(f"⚠️ Conflito 409 detetado. A tentar novamente (tentativa {attempt+1})...")
+            print(f"⚠️ Conflito 409 (SHA mismatch). A tentar novamente em 2s...")
             import time
-            time.sleep(1.5)
+            time.sleep(2)
             return upload_to_github(local_path, remote_path, attempt=attempt+1)
             
         msg = f"Erro HTTP {e.code}: {error_body}"
@@ -863,7 +872,7 @@ def upload_to_github(local_path: str, remote_path: str, attempt=1):
         _mostrar_erro_upload(msg)
         return False
     except Exception as e:
-        msg = f"Erro inesperado: {e}"
+        msg = f"Erro de Rede/SSL: {e}"
         print(f"❌ {msg}")
         _mostrar_erro_upload(msg)
         return False
@@ -5470,6 +5479,7 @@ def abrir_interface(nome, ssfid, janela=None):
     btn_rosto.pack(side="left", padx=10)
     
     # Label informativa (Uuid.pdf)
+    global lbl_rosto_info
     lbl_rosto_info = ttk.Label(row_rosto, text="(ficheiro descarregado automaticamente da Cloud caso que tenha inserido alguma venda)", font=("Arial", 8), foreground="gray")
     lbl_rosto_info.pack(side="left")
 
@@ -7051,6 +7061,12 @@ def abrir_interface(nome, ssfid, janela=None):
                 globals()["selected_rosto_path"] = local_p
                 try:
                     btn_rosto.configure(text="✅ Rosto Carregado (Cloud)")
+                    # Atualizar a label informativa se já existir assinatura
+                    if 'lbl_rosto_info' in globals():
+                        globals()['lbl_rosto_info'].config(
+                            text="(Já tens assinatura na Cloud. Para alterar, clica no botão acima)",
+                            foreground="#2E7D32" 
+                        )
                 except Exception:
                     pass
         except Exception:
