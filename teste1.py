@@ -895,16 +895,32 @@ def ensure_local_file(relative_path: str) -> str:
     # 2. Guardar na pasta temporária do sistema para não sujar a pasta da app
     local_path = os.path.join(tempfile.gettempdir(), filename)
         
-    if not os.path.exists(local_path):
-        remote_url = GITHUB_BASE_URL + relative_path
+    if not os.path.exists(local_path) or os.path.getsize(local_path) < 1000:
+        import urllib.parse
+        encoded_rel = urllib.parse.quote(relative_path, safe='/')
+        remote_url = GITHUB_BASE_URL + encoded_rel
+        
         print(f"☁️ A descarregar para pasta temporária: {remote_url}")
         try:
             req = urllib.request.Request(remote_url)
-            with urllib.request.urlopen(req, timeout=15) as response, open(local_path, 'wb') as out_file:
-                out_file.write(response.read())
-            print(f"✅ Download temporário concluído: {filename}")
+            # Adicionar Cache-Control para evitar downloads de versões antigas/em cache
+            import time
+            req.add_header("Cache-Control", "no-cache")
+            req.full_url = remote_url + f"?t={int(time.time())}"
+
+            with urllib.request.urlopen(req, timeout=15) as response:
+                content = response.read()
+                if len(content) > 100: # Evita gravar ficheiros de erro "404 Not Found" que o Github às vezes manda como HTML
+                    with open(local_path, 'wb') as out_file:
+                        out_file.write(content)
+                    print(f"✅ Download temporário concluído: {filename}")
+                else:
+                    print(f"⚠️ Conteúdo recebido demasiado pequeno ({len(content)} bytes) para ser um PDF válido.")
         except Exception as e:
             print(f"❌ Erro ao descarregar {filename} do Cloud: {e}")
+            if os.path.exists(local_path):
+                try: os.remove(local_path)
+                except: pass
             
     return local_path
 
@@ -5233,7 +5249,7 @@ def abrir_interface(nome, ssfid, janela=None):
 
     tk.Label(
         title_box,
-        text="CONTRATO VODAFONE (V 1.2.1)",
+        text="CONTRATO VODAFONE (V 1.2.2)",
         bg=VDF_BG,
         fg=VDF_TEXT,
         font=("Arial", 14, "bold")
@@ -5412,8 +5428,23 @@ def abrir_interface(nome, ssfid, janela=None):
         path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
         if path:
             selected_rosto_path = path
-            btn_rosto.configure(text="✅ Rosto Selecionado")
+            btn_rosto.configure(text="⌛ A Carregar para Cloud...")
             print(f"📂 Folha de Rosto Local selecionada: {path}")
+            
+            def _upload_task():
+                try:
+                    u = obter_uuid()
+                    remoto = f"FOLHA_ROSTO/{u}.pdf"
+                    if upload_to_github(path, remoto):
+                        try: btn_rosto.configure(text="✅ Rosto Carregado (Cloud)")
+                        except: pass
+                    else:
+                        try: btn_rosto.configure(text="⚠️ Erro no Upload")
+                        except: pass
+                except Exception as e:
+                    print(f"Erro no upload imediato: {e}")
+            
+            threading.Thread(target=_upload_task, daemon=True).start()
 
     ttk.Label(frame, text="DADOS DO VENDEDOR E RC", style="Section.TLabel").pack(anchor="w", pady=(0, 8))
     
