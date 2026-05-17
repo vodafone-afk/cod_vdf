@@ -5260,7 +5260,7 @@ def abrir_interface(nome, ssfid, janela=None):
 
     tk.Label(
         title_box,
-        text="CONTRATO VODAFONE (V 1.2.2)",
+        text="CONTRATO VODAFONE (V 1.2.3)",
         bg=VDF_BG,
         fg=VDF_TEXT,
         font=("Arial", 14, "bold")
@@ -7378,7 +7378,7 @@ def obter_uuid():
 
 
 # ======================= LOGIN =======================
-def abrir_login():
+def abrir_login(root_win):
     """Abre o login com integração do UUID e base de dados."""
     uuid_pc = obter_uuid()
     
@@ -7459,7 +7459,7 @@ def abrir_login():
         loop.create_task(
             notificar_telegram(f"🟢 {nome} entrou\nUUID: {uuid_pc}")
         )
-        abrir_interface(vendedor["nome"], vendedor["SFID"])
+        abrir_interface(vendedor["nome"], vendedor["SFID"], janela=root_win)
         return
 
     # Caso não exista UUID → abrir login para introduzir nome e SFID
@@ -7471,7 +7471,12 @@ def abrir_login():
     # Isto evita inconsistências de estilo/layout que podem ocorrer em executáveis.
     exit_after_register = {'value': False}
 
-    login = ttkb.Window(themename="cosmo")
+    login = root_win
+    # Limpar widgets se existirem
+    for w in list(login.winfo_children()):
+        w.destroy()
+    login.deiconify()
+    
     login.title("Vodafone | Acesso à Ferramenta")
     login.geometry("480x620")
     login.resizable(False, False)
@@ -7671,9 +7676,9 @@ def check_single_instance():
         # Fecha esta segunda instância sem fazer nada
         print("❌ A terminar processo duplicado...")
         sys.exit(0)
-def mostrar_splash():
+def mostrar_splash(root):
     """Cria uma janela de carregamento profissional com estilo Vodafone."""
-    splash = tk.Tk()
+    splash = tk.Toplevel(root)
     splash.title("Vodafone Tool - A carregar")
     
     # Dimensões e Centralização
@@ -7726,22 +7731,28 @@ if __name__ == "__main__":
     # 1. Impedir múltiplas aberturas
     check_single_instance()
     
-    # 2. Mostrar tela de carregamento (Splash)
-    splash_win = mostrar_splash()
+    # 2. Criar a Root Window (Raiz principal que aguenta toda a app e nunca morre)
+    root_win = ttkb.Window(themename="cosmo")
+    root_win.withdraw()
+    globals()['MAIN_WINDOW_HANDLE'] = root_win
     
-    # 3. Pequeno delay para a tela ser visível e carregar recursos
-    # Depois destrói o splash e abre o login normal
+    # 3. Mostrar tela de carregamento (Splash em cima da Raiz)
+    splash_win = mostrar_splash(root_win)
+    
+    # 4. Pequeno delay para a tela ser visível e carregar recursos
+    # Depois destrói APENAS o splash e abre o login normal reaproveitando a Root Window
     def carregar_e_abrir():
-        splash_win.destroy()
-        abrir_login()
+        try:
+            splash_win.destroy()
+        except Exception:
+            pass
+        abrir_login(root_win)
         
-    splash_win.after(2500, carregar_e_abrir)
-    splash_win.mainloop()
+    root_win.after(2500, carregar_e_abrir)
+    
+    import atexit
+    uuid_pc = obter_uuid()
+    atexit.register(lambda: user_sai(uuid_pc))
 
-    # cod completo é este e esta complementado com AI
-
-import atexit
-
-uuid_pc = obter_uuid()
-
-atexit.register(lambda: user_sai(uuid_pc))
+    # Único Mainloop do sistema que aguenta tudo sem crashar no Mac!
+    root_win.mainloop()
