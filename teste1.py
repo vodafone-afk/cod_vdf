@@ -1868,11 +1868,8 @@ def exportar_perguntas_para_google_sheets(dados: dict) -> Tuple[bool, str]:
         start_data_row = GOOGLE_SHEETS_START_ROW + 1
 
         # ID do registo (quando vem da BD)
-        rc_id = ""
-        try:
-            rc_id = dados.get("rc_id") or dados.get("id") or dados.get("ID") or ""
-        except Exception:
-            rc_id = ""
+        rc_id = dados.get("rc_id") or dados.get("id") or dados.get("ID") or ""
+        rc_id_str = str(rc_id).strip() if rc_id else ""
 
         # Identidade do vendedor: para bridge (Mac->Windows) usamos SEMPRE o que vem no registo (RC),
         # e só em último caso fazemos fallback para o vendedor logado.
@@ -1928,12 +1925,11 @@ def exportar_perguntas_para_google_sheets(dados: dict) -> Tuple[bool, str]:
         ]
 
         # UPSERT POR ID (evita duplicar)
-        row_info = ""
-        rc_id_str = str(rc_id).strip()
         target_row = None
 
-        if rc_id_str:
+        if rc_id_str and rc_id_str != "" and rc_id_str != "None":
             try:
+                # Obter todos os IDs da coluna A para procurar o correspondente
                 id_range = f"{GOOGLE_SHEETS_TAB_NAME}!A{start_data_row}:A"
                 id_resp = service.spreadsheets().values().get(
                     spreadsheetId=GOOGLE_SHEETS_SPREADSHEET_ID,
@@ -1941,15 +1937,19 @@ def exportar_perguntas_para_google_sheets(dados: dict) -> Tuple[bool, str]:
                 ).execute()
                 id_values = id_resp.get("values", []) or []
 
-                for idx, row in enumerate(id_values, start=0):
-                    cell = (row[0] if row else "")
-                    if str(cell).strip() == rc_id_str:
-                        target_row = start_data_row + idx
-                        break
-            except Exception:
+                for idx, r_data in enumerate(id_values):
+                    if r_data:
+                        cell_val = str(r_data[0]).strip()
+                        # Comparação robusta (ex: "1332" == "1332.0")
+                        if cell_val == rc_id_str or cell_val.split('.')[0] == rc_id_str.split('.')[0]:
+                            target_row = start_data_row + idx
+                            break
+            except Exception as e:
+                print(f"Erro ao procurar ID no Sheets: {e}")
                 target_row = None
 
-        if target_row is not None:
+        if target_row:
+            # UPDATE: Sobrescreve a linha existente
             update_range = f"{GOOGLE_SHEETS_TAB_NAME}!A{target_row}:P{target_row}"
             service.spreadsheets().values().update(
                 spreadsheetId=GOOGLE_SHEETS_SPREADSHEET_ID,
@@ -1959,21 +1959,23 @@ def exportar_perguntas_para_google_sheets(dados: dict) -> Tuple[bool, str]:
             ).execute()
             row_info = f" (atualizado na linha {target_row})"
         else:
+            # APPEND: Adiciona na próxima linha vazia (sem INSERT_ROWS para não empurrar)
             append_range = f"{GOOGLE_SHEETS_TAB_NAME}!A{start_data_row}:P"
             resp = service.spreadsheets().values().append(
                 spreadsheetId=GOOGLE_SHEETS_SPREADSHEET_ID,
                 range=append_range,
                 valueInputOption="USER_ENTERED",
-                insertDataOption="INSERT_ROWS",
                 body={"values": [values_row]},
             ).execute()
-
+            
             try:
-                updated_range = (resp.get("updates", {}) or {}).get("updatedRange", "") or ""
+                updated_range = resp.get("updates", {}).get("updatedRange", "")
                 m_row = re.search(r'!\w+(\d+)', updated_range)
                 if m_row:
                     row_info = f" (adicionado na linha {m_row.group(1)})"
-            except Exception:
+                else:
+                    row_info = " (adicionado)"
+            except:
                 row_info = ""
 
         return True, f"Perguntas exportadas para Google Sheets ({GOOGLE_SHEETS_TAB_NAME}){row_info}."
@@ -7652,20 +7654,22 @@ def check_single_instance():
         threading.Thread(target=listen_restore, daemon=True).start()
         return True
         
-    except socket.error:
+    except socket.error as e:
         # 3. Porta ocupada -> Já existe uma app aberta! 
         # Vamos apenas avisar a app original para "aparecer" e fechar esta nova.
+        print(f"⚠️ [SINGLE INSTANCE] Detetada outra instância a correr (Porta ocupada: {e}). A tentar acordar a app original...")
         try:
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.settimeout(2)
             client.connect(('127.0.0.1', port))
             client.send("RESTORE".encode())
             client.close()
-        except Exception:
-            pass
+            print("✅ Sinal de RESTORE enviado com sucesso. Esta janela vai fechar.")
+        except Exception as e2:
+            print(f"⚠️ Erro ao enviar RESTORE: {e2}")
         # Fecha esta segunda instância sem fazer nada
+        print("❌ A terminar processo duplicado...")
         sys.exit(0)
-
 def mostrar_splash():
     """Cria uma janela de carregamento profissional com estilo Vodafone."""
     splash = tk.Tk()
