@@ -7401,7 +7401,8 @@ def abrir_login():
         )
         return
     
-    user_entra(uuid_pc, vendedor.get('nome','Desconhecido'))
+    nome_user = vendedor.get('nome','Desconhecido') if vendedor else 'Desconhecido'
+    user_entra(uuid_pc, nome_user)
     threading.Thread(target=ouvir_comandos, daemon=True).start()
 
     if vendedor:
