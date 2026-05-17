@@ -7381,11 +7381,13 @@ def obter_uuid():
 
 # ======================= LOGIN =======================
 def abrir_login(root_win):
-    """Abre o login com integração do UUID e base de dados."""
+    """Abre o login com integração do UUID e base de dados.
+    ATENÇÃO: Esta função corre numa background thread.
+    Toda a criação de UI deve ser agendada no main thread via root_win.after().
+    """
     uuid_pc = obter_uuid()
-    
 
-    # Se UUID existe na base de dados → entrar direto
+    # --- Toda esta lógica de DB corre em background thread (OK!) ---
     try:
         conn = ligar_db()
         cursor = conn.cursor(dictionary=True)
@@ -7397,44 +7399,45 @@ def abrir_login(root_win):
         cursor.execute("SELECT * FROM vendedores WHERE UUID = %s", (uuid_pc,))
         vendedor = cursor.fetchone()
     except Exception as e:
-        messagebox.showerror(
+        # Agendar o erro de volta para o main thread
+        err_msg = str(e)
+        root_win.after(0, lambda: messagebox.showerror(
             "Erro de ligação à Base de Dados",
-            f"Não foi possível ligar à BD.\n\nDetalhes:\n{e}"
-        )
+            f"Não foi possível ligar à BD.\n\nDetalhes:\n{err_msg}"
+        ))
         return
-    
-    nome_user = vendedor.get('nome','Desconhecido') if vendedor else 'Desconhecido'
+
+    nome_user = vendedor.get('nome', 'Desconhecido') if vendedor else 'Desconhecido'
     user_entra(uuid_pc, nome_user)
     threading.Thread(target=ouvir_comandos, daemon=True).start()
 
     if vendedor:
-        # UUID já existe → entrar direto
+        # UUID existe → fechar cursor/conn e preparar globals antes de abrir UI
         cursor.close()
         conn.close()
-        globals()['CURRENT_VENDEDOR_NOME'] = vendedor.get('nome','')
-        globals()['CURRENT_VENDEDOR_SFID'] = vendedor.get('SFID','')
+        globals()['CURRENT_VENDEDOR_NOME'] = vendedor.get('nome', '')
+        globals()['CURRENT_VENDEDOR_SFID'] = vendedor.get('SFID', '')
 
-        # --- ATUALIZAÇÃO ÚNICA DE UUID NO RC (Migração/Segurança) ---
+        # Atualizar UUID no RC em background
         try:
-            sfid_log = vendedor.get('SFID','')
+            sfid_log = vendedor.get('SFID', '')
             if sfid_log:
                 conn_up = ligar_db()
                 cur_up = conn_up.cursor()
-                # Se existirem contratos deste SFID sem UUID_COMERCIAL, atualiza com o UUID atual do PC
                 cur_up.execute("UPDATE RC SET UUID_COMERCIAL = %s WHERE SFID = %s AND (UUID_COMERCIAL IS NULL OR UUID_COMERCIAL = '')", (uuid_pc, sfid_log))
                 conn_up.commit()
                 cur_up.close()
                 conn_up.close()
         except Exception as e:
             print(f"Erro ao migrar UUID_COMERCIAL: {e}")
-        # mac: 1 = utilizador Mac, 0 = não-Mac
+
+        # Mac flag
         try:
             mac_val = vendedor.get('mac', None)
         except Exception:
             mac_val = None
         if mac_val is None:
             mac_val = 1 if sys.platform == 'darwin' else 0
-            # tenta persistir para futuras sessões
             try:
                 conn2 = ligar_db()
                 try:
@@ -7449,155 +7452,119 @@ def abrir_login(root_win):
                 pass
         globals()['CURRENT_VENDEDOR_MAC'] = int(mac_val) if str(mac_val).strip() != '' else 0
 
-        # ==========================================
-        # CHAMA O DISCORD AQUI!
-        # ==========================================
-        time.sleep(2)  # ⬅️ mete isto aqui
-        import asyncio
-
-        loop = asyncio.get_event_loop()
-        nome = vendedor.get('nome', 'Desconhecido')
-
-        loop.create_task(
-            notificar_telegram(f"🟢 {nome} entrou\nUUID: {uuid_pc}")
-        )
-        abrir_interface(vendedor["nome"], vendedor["SFID"], janela=root_win)
-        return
-
-    # Caso não exista UUID → abrir login para introduzir nome e SFID
-
-    # NOTA: Não chamamos abrir_interface() dentro do login.mainloop(),
-    # porque isso cria um mainloop aninhado e pode deixar a UI \"em branco\" na 1ª execução.
-    next_user = {'nome': None, 'sfid': None}
-    # Quando o utilizador cria a conta pela 1ª vez, vamos encerrar a aplicação e pedir para abrir novamente.
-    # Isto evita inconsistências de estilo/layout que podem ocorrer em executáveis.
-    exit_after_register = {'value': False}
-
-    login = root_win
-    # Limpar widgets se existirem
-    for w in list(login.winfo_children()):
-        w.destroy()
-    login.deiconify()
-    
-    login.title("Vodafone | Acesso à Ferramenta")
-    login.geometry("480x620")
-    login.resizable(False, False)
-    
-    # Guardar handle para o restauro automático funcionar também no login
-    globals()['LOGIN_WINDOW_HANDLE'] = login
-    
-    # Esconder a janela em vez de fechar a app quando o utilizador clica no X
-    login.protocol("WM_DELETE_WINDOW", login.withdraw)
-
-    bg_frame = tk.Frame(login, bg=VODA_RED)
-    bg_frame.place(relwidth=1, relheight=1)
-
-    dark_top = tk.Frame(bg_frame, bg="#B80000", height=280)
-    dark_top.place(relwidth=1, rely=0)
-
-    tk.Label(bg_frame, text="VODAFONE", font=("Helvetica", 48, "bold"),
-             fg="white", bg="#B80000").place(relx=0.5, y=100, anchor="center")
-    tk.Label(bg_frame, text="Field Tool", font=("Helvetica", 20),
-             fg="white", bg="#B80000").place(relx=0.5, y=160, anchor="center")
-
-    form = tk.Frame(bg_frame, bg=VODA_RED)
-    form.place(relx=0.5, rely=0.58, anchor="center")
-
-    tk.Label(form, text="PRIMEIRO E ULTIMO NOME", font=("Helvetica", 10, "bold"),
-             fg="white", bg=VODA_RED).pack()
-    nome_entry = ttkb.Entry(form, font=("Arial", 14), bootstyle="light")
-    nome_entry.pack(padx=40, ipadx=20, ipady=10)
-
-    tk.Label(form, text="SSFID", font=("Helvetica", 10, "bold"),
-             fg="white", bg=VODA_RED).pack(pady=(20, 5))
-    ssfid_entry = ttkb.Entry(form, font=("Arial", 14), bootstyle="light")
-    ssfid_entry.pack(padx=40, ipadx=20, ipady=10)
-
-    # É utilizador MAC?
-    mac_var = tk.IntVar(value=1 if sys.platform == 'darwin' else 0)
-    try:
-        cb_mac = ttk.Checkbutton(form, text="É utilizador MAC ?", variable=mac_var)
-        cb_mac.pack(pady=(12, 0))
-    except Exception:
-        pass
-
-
-    def registar():
-        n = nome_entry.get().strip()
-        s = ssfid_entry.get().strip()
-
-        if not n or not s:
-            messagebox.showerror("Erro", "Preenche os dois campos!")
-            return
-
-        # Verificar se SFID já existe
-        cursor.execute("SELECT * FROM vendedores WHERE SFID = %s", (s,))
-        if cursor.fetchone():
-            messagebox.showerror("Erro Ético", "Este SFID já existe! Acesso negado.")
-            return
-
-        # Inserir novo vendedor na tabela
-        mac_val = int(mac_var.get() or 0)
-
-        # Garantir coluna mac na tabela vendedores
+        # Notificar Telegram em background separado (não bloquear)
+        nome_v = vendedor.get('nome', 'Desconhecido')
         try:
-            ensure_vendedores_mac_column(conn)
+            threading.Thread(
+                target=lambda: asyncio.run(notificar_telegram(f"🟢 {nome_v} entrou\nUUID: {uuid_pc}")),
+                daemon=True
+            ).start()
         except Exception:
             pass
 
-        cursor.execute("INSERT INTO vendedores (UUID, nome, SFID, mac) VALUES (%s, %s, %s, %s)",
-                       (uuid_pc, n, s, mac_val))
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-        # ==========================================
-        # CHAMA O DISCORD AQUI TAMBÉM! (Para malta nova)
-        # ==========================================
-        asyncio.run(notificar_telegram(app, uuid_pc, nome_vendedor))
-
-
-        # Sinalizar ao fluxo principal que o registo foi concluído
-        next_user['nome'] = n
-        next_user['sfid'] = s
-        globals()['CURRENT_VENDEDOR_NOME'] = n
-        globals()['CURRENT_VENDEDOR_SFID'] = s
-        globals()['CURRENT_VENDEDOR_MAC'] = int(mac_val)
-        exit_after_register['value'] = True
-
-        # Feedback ao utilizador e encerrar para que volte a abrir manualmente.
-        messagebox.showinfo(
-            'Registo',
-            'Conta criada com sucesso.\n\nA aplicação vai desligar agora.\nAbre o programa novamente para entrar.'
-        )
-        # Sair do mainloop de forma limpa (o destroy será feito após o mainloop terminar).
-        try:
-            login.after(50, login.quit)
-        except Exception:
-            try:
-                login.quit()
-            except Exception:
-                pass
-
-
-    ttkb.Button(form, text="ACEDER À FERRAMENTA, DO FIELDS MARKETING VODAFONE",
-                command=registar, bootstyle="danger",
-                width=32, padding=15).pack(pady=35)
-
-    tk.Label(bg_frame, text="Ferramenta exclusiva para técnicos Vodafone\nPortugal © 2025",
-             font=("Arial", 9), fg="#ff9999", bg=VODA_RED).place(relx=0.5, rely=0.94, anchor="center")
-
-    login.mainloop()
-
-    # Fechar a janela do login (se ainda estiver aberta).
-    try:
-        login.destroy()
-    except Exception:
-        pass
-
-    # Se acabou de criar conta, termina aqui e pede ao utilizador para abrir novamente.
-    if exit_after_register.get('value'):
+        # *** AGENDAR ABERTURA DA INTERFACE NO MAIN THREAD ***
+        root_win.after(0, lambda: abrir_interface(vendedor["nome"], vendedor["SFID"], janela=root_win))
         return
+
+    # UUID não existe → mostrar janela de registo no MAIN THREAD
+    def _mostrar_janela_registo():
+        login = root_win
+        for w in list(login.winfo_children()):
+            w.destroy()
+        login.deiconify()
+
+        login.title("Vodafone | Acesso à Ferramenta")
+        login.geometry("480x620")
+        login.resizable(False, False)
+        globals()['LOGIN_WINDOW_HANDLE'] = login
+        login.protocol("WM_DELETE_WINDOW", login.withdraw)
+
+        bg_frame = tk.Frame(login, bg=VODA_RED)
+        bg_frame.place(relwidth=1, relheight=1)
+
+        dark_top = tk.Frame(bg_frame, bg="#B80000", height=280)
+        dark_top.place(relwidth=1, rely=0)
+
+        tk.Label(bg_frame, text="VODAFONE", font=("Helvetica", 48, "bold"),
+                 fg="white", bg="#B80000").place(relx=0.5, y=100, anchor="center")
+        tk.Label(bg_frame, text="Field Tool", font=("Helvetica", 20),
+                 fg="white", bg="#B80000").place(relx=0.5, y=160, anchor="center")
+
+        form = tk.Frame(bg_frame, bg=VODA_RED)
+        form.place(relx=0.5, rely=0.58, anchor="center")
+
+        tk.Label(form, text="PRIMEIRO E ULTIMO NOME", font=("Helvetica", 10, "bold"),
+                 fg="white", bg=VODA_RED).pack()
+        nome_entry = ttkb.Entry(form, font=("Arial", 14), bootstyle="light")
+        nome_entry.pack(padx=40, ipadx=20, ipady=10)
+
+        tk.Label(form, text="SSFID", font=("Helvetica", 10, "bold"),
+                 fg="white", bg=VODA_RED).pack(pady=(20, 5))
+        ssfid_entry = ttkb.Entry(form, font=("Arial", 14), bootstyle="light")
+        ssfid_entry.pack(padx=40, ipadx=20, ipady=10)
+
+        mac_var = tk.IntVar(value=1 if sys.platform == 'darwin' else 0)
+        try:
+            cb_mac = ttk.Checkbutton(form, text="É utilizador MAC ?", variable=mac_var)
+            cb_mac.pack(pady=(12, 0))
+        except Exception:
+            pass
+
+        def registar():
+            n = nome_entry.get().strip()
+            s = ssfid_entry.get().strip()
+            if not n or not s:
+                messagebox.showerror("Erro", "Preenche os dois campos!")
+                return
+
+            def _registar_bg():
+                try:
+                    conn_r = ligar_db()
+                    cursor_r = conn_r.cursor(dictionary=True)
+                    cursor_r.execute("SELECT * FROM vendedores WHERE SFID = %s", (s,))
+                    if cursor_r.fetchone():
+                        root_win.after(0, lambda: messagebox.showerror("Erro Ético", "Este SFID já existe! Acesso negado."))
+                        cursor_r.close()
+                        conn_r.close()
+                        return
+
+                    mac_val_r = int(mac_var.get() or 0)
+                    try:
+                        ensure_vendedores_mac_column(conn_r)
+                    except Exception:
+                        pass
+                    cursor_r.execute("INSERT INTO vendedores (UUID, nome, SFID, mac) VALUES (%s, %s, %s, %s)",
+                                     (uuid_pc, n, s, mac_val_r))
+                    conn_r.commit()
+                    cursor_r.close()
+                    conn_r.close()
+
+                    globals()['CURRENT_VENDEDOR_NOME'] = n
+                    globals()['CURRENT_VENDEDOR_SFID'] = s
+                    globals()['CURRENT_VENDEDOR_MAC'] = int(mac_val_r)
+
+                    def _pos_registo():
+                        messagebox.showinfo(
+                            'Registo',
+                            'Conta criada com sucesso.\n\nA aplicação vai desligar agora.\nAbre o programa novamente para entrar.'
+                        )
+                        sys.exit(0)
+                    root_win.after(0, _pos_registo)
+                except Exception as ex:
+                    root_win.after(0, lambda: messagebox.showerror("Erro no Registo", str(ex)))
+
+            threading.Thread(target=_registar_bg, daemon=True).start()
+
+        ttkb.Button(form, text="ACEDER À FERRAMENTA, DO FIELDS MARKETING VODAFONE",
+                    command=registar, bootstyle="danger",
+                    width=32, padding=15).pack(pady=35)
+
+        tk.Label(bg_frame, text="Ferramenta exclusiva para técnicos Vodafone\nPortugal © 2025",
+                 font=("Arial", 9), fg="#ff9999", bg=VODA_RED).place(relx=0.5, rely=0.94, anchor="center")
+
+    # Agendar a janela de registo no main thread
+    root_win.after(0, _mostrar_janela_registo)
+
 
     # Caso contrário, abrir a interface principal.
     if next_user.get('nome') and next_user.get('sfid'):
@@ -7748,7 +7715,21 @@ if __name__ == "__main__":
             splash_win.destroy()
         except Exception:
             pass
-        abrir_login(root_win)
+        # Correr a lógica de login numa thread separada para não bloquear a UI no Mac
+        def _iniciar_em_background():
+            try:
+                abrir_login(root_win)
+            except Exception:
+                import traceback
+                err = traceback.format_exc()
+                # Só atualizar a UI a partir do main thread
+                try:
+                    root_win.after(0, lambda: __import__('tkinter').messagebox.showerror("Erro", err))
+                except Exception:
+                    pass
+        
+        import threading
+        threading.Thread(target=_iniciar_em_background, daemon=True).start()
         
     root_win.after(2500, carregar_e_abrir)
     
