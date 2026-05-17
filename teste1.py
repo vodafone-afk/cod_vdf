@@ -109,7 +109,8 @@ def ligar_db():
         host="...",
         user="...",
         password="...",
-        database="..."
+        database="...",
+        use_pure=True
     )
 
 def validar_nif_pt(nif):
@@ -977,7 +978,8 @@ def ligar_db():
         password=DB_CONFIG["password"],
         database=DB_CONFIG["database"],
         port=DB_CONFIG["port"],
-        auth_plugin='mysql_native_password'  # <--- ADICIONA ESTA LINHA
+        auth_plugin='mysql_native_password',  # <--- ADICIONA ESTA LINHA
+        use_pure=True # <--- FIX PARA O MAC (Evita dlopen de C-extensions no PyInstaller)
     )
 
 
